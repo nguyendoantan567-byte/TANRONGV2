@@ -19567,884 +19567,745 @@ end)()
         end,
     }
 end)()
--- Lord Hub + Auto Brainrot
--- PC + Controller keybind | Customizable | Auto-save | Auto Brainrot Detection
+-- Clean by Prince Bot | .gg/freesource
 
-local UserInputService = game:GetService("UserInputService")
-local TweenService     = game:GetService("TweenService")
-local HttpService      = game:GetService("HttpService")
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService") -- new
+local Players      = game:GetService("Players")
+local RunService   = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UIS          = game:GetService("UserInputService")
+local LP           = Players.LocalPlayer
 
-local plr              = Players.LocalPlayer
-local plrGui           = plr:WaitForChild("PlayerGui")
-
--- ══════════════════════════════════════════════════════════════════════
--- CONFIG & SAVE
--- ══════════════════════════════════════════════════════════════════════
-local CONFIG_FILE = "LordHubPingLagger_Config.json"
-
-local DEFAULT_CFG = {
-    power         = 100000,
-    interval      = 0.125,
-    keybindKb     = "F",
-    keybindGp     = "ButtonR2",
-    autoBrainrot  = false,  -- requires manual opt-in
+local Steal = {
+    AutoStealEnabled = false,
+    StealRadius      = 60,
+    StealDuration    = 1.3,
+    StealDelay       = 0.25,
+    StealMode        = "semi",
+    StealRange       = 10,
+    EntryDelay       = 0.3,
+    HoldMax          = 2.6,
+    Data             = {},
 }
 
-local cfg = {
-    power         = DEFAULT_CFG.power,
-    interval      = DEFAULT_CFG.interval,
-    keybindKb     = DEFAULT_CFG.keybindKb,
-    keybindGp     = DEFAULT_CFG.keybindGp,
-    autoBrainrot  = DEFAULT_CFG.autoBrainrot,
+local SemiSteal = {
+    State = {
+        active = false, startTime = 0, duration = 1.3, progress = 0,
+        inRange = false, paused = false, phase = "idle", label = "",
+        lastResult = "", lastResultTime = 0, totalSteals = 0, failedSteals = 0,
+    },
+    CONFIG = {
+        HOLD_MIN = 1.3, HOLD_MAX = 2.6, ENTRY_DELAY = 0.3, COOLDOWN = 0.05,
+        STEAL_RANGE = 9, PRIME_RANGE = 80, RADIUS = 60, DURATION = 1.3,
+        DELAY_RADIUS = 8, STOP_TIME = 1.29, STOP_TIME_ENABLED = true,
+        STOP_PERCENT = 75, USE_STOP_PERCENT = true,
+    },
 }
 
-local function resolveKb(name)
-    if not name or name == "" or name == "None" then return nil end
-    local ok, val = pcall(function() return Enum.KeyCode[name] end)
-    return (ok and val) or nil
-end
+local Conns               = {}
+local isStealing          = false
+local stealStartTime      = nil
+local stealMode           = "normal"
+local autoGrabSetDelayRadius = 0
+local autoGrabStopTime    = 1.1
+local autoGrabStopEnabled = false
+local normalStealProgress = 0
+local normalStealPaused   = false
+local stealBarForce       = nil
+local stealBarStatus      = nil
 
-local function saveConfig()
-    local ok, encoded = pcall(function() return HttpService:JSONEncode(cfg) end)
-    if ok and encoded and writefile then
-        pcall(writefile, CONFIG_FILE, encoded)
+local progressFill = nil
+local progressPct  = nil
+
+local function isMyPlotByName(plotName)
+    local plots = workspace:FindFirstChild("Plots")
+    if not plots then return false end
+    local plot = plots:FindFirstChild(plotName)
+    if not plot then return false end
+    local sign = plot:FindFirstChild("PlotSign")
+    if sign then
+        local yb = sign:FindFirstChild("YourBase")
+        if yb and yb:IsA("BillboardGui") then return yb.Enabled == true end
     end
+    return false
 end
 
-local function loadConfig()
-    if not (isfile and readfile and isfile(CONFIG_FILE)) then return end
-    local ok, data = pcall(function() return HttpService:JSONDecode(readfile(CONFIG_FILE)) end)
-    if not ok or type(data) ~= "table" then return end
-
-    cfg.power         = tonumber(data.power) or DEFAULT_CFG.power
-    cfg.interval      = tonumber(data.interval) or DEFAULT_CFG.interval
-    cfg.keybindKb     = type(data.keybindKb) == "string" and data.keybindKb or DEFAULT_CFG.keybindKb
-    cfg.keybindGp     = type(data.keybindGp) == "string" and data.keybindGp or DEFAULT_CFG.keybindGp
-    if type(data.autoBrainrot) == "boolean" then cfg.autoBrainrot = data.autoBrainrot else cfg.autoBrainrot = DEFAULT_CFG.autoBrainrot end
-end
-
-loadConfig()
--- Auto Brainrot must always start disabled. The user must enable it manually.
-cfg.autoBrainrot = false
-
-local active           = false
-local listeningFor     = nil
-local remote           = nil
-local brainrotMode     = false
-local lastBrainrotState = false
-local manualOverride   = false -- true when user manually turned it off while holding brainrot
-
--- ══════════════════════════════════════════════════════════════════════
--- COLOURS
--- ══════════════════════════════════════════════════════════════════════
-local C = {
-    bg      = Color3.fromRGB(8,   8,   8),
-    panel   = Color3.fromRGB(14,  14,  14),
-    card    = Color3.fromRGB(24,  24,  24),
-    purple1 = Color3.fromRGB(45,  45,  45), -- kept as shared accent name
-    purple2 = Color3.fromRGB(80,  80,  80),
-    purple3 = Color3.fromRGB(235, 235, 235),
-    glow    = Color3.fromRGB(120, 120, 120),
-    white   = Color3.fromRGB(245, 245, 245),
-    dim     = Color3.fromRGB(150, 150, 150),
-    green   = Color3.fromRGB(100,255, 160),
-    yellow  = Color3.fromRGB(255, 220, 60),
-    red     = Color3.fromRGB(255,100, 120),
-    waiting = Color3.fromRGB(255, 190,  50),
-    inputBg = Color3.fromRGB(18,  18,  18),
-}
-
-local T = {
-    bg      = 0.64,
-    panel   = 0.62,
-    card    = 0.60,
-    header  = 0.48,
-    inputBg = 0.58,
-}
-
--- ══════════════════════════════════════════════════════════════════════
--- DESTROY OLD GUI
--- ══════════════════════════════════════════════════════════════════════
-for _, kid in pairs(plrGui:GetChildren()) do
-    if kid.Name == "LordHubPingLaggerGui" then kid:Destroy() end
-end
-
-local screen = Instance.new("ScreenGui")
-screen.Name         = "LordHubPingLaggerGui"
-screen.ResetOnSpawn = false
-screen.DisplayOrder = 15
-screen.Parent       = plrGui
-
-
-
--- ══════════════════════════════════════════════════════════════════════
--- HELPERS
--- ══════════════════════════════════════════════════════════════════════
-local function applyGradient(parent, c1, c2, rotation)
-    local g = Instance.new("UIGradient", parent)
-    g.Color    = ColorSequence.new({ ColorSequenceKeypoint.new(0,c1), ColorSequenceKeypoint.new(1,c2) })
-    g.Rotation = rotation or 135
-    return g
-end
-
-local function tw(obj, props, t)
-    TweenService:Create(obj,
-        TweenInfo.new(t or 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        props):Play()
-end
-
-local function makeDraggable(frame)
-    local dragging, dragStart, startPos
-    frame.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1
-        or i.UserInputType == Enum.UserInputType.Touch then
-            dragging  = true
-            dragStart = i.Position
-            startPos  = frame.Position
-            i.Changed:Connect(function()
-                if i.UserInputState == Enum.UserInputState.End then dragging = false end
+local function findNearestPrompt()
+    local char = LP.Character
+    if not char then return nil, nil, nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return nil, nil, nil end
+    local plots = workspace:FindFirstChild("Plots")
+    if not plots then return nil, nil, nil end
+    local nearestPrompt, nearestDist, nearestName = nil, math.huge, nil
+    for _, plot in ipairs(plots:GetChildren()) do
+        local isMine = false
+        pcall(function() isMine = isMyPlotByName(plot.Name) end)
+        if isMine then continue end
+        local pods = plot:FindFirstChild("AnimalPodiums")
+        if not pods then continue end
+        for _, pod in ipairs(pods:GetChildren()) do
+            pcall(function()
+                local base  = pod:FindFirstChild("Base")
+                local spawn = base and base:FindFirstChild("Spawn")
+                if spawn then
+                    local dist = (spawn.Position - root.Position).Magnitude
+                    if dist < nearestDist and dist <= (Steal.StealRadius or 60) then
+                        local att = spawn:FindFirstChild("PromptAttachment")
+                        if att then
+                            for _, child in ipairs(att:GetChildren()) do
+                                if child:IsA("ProximityPrompt")
+                                    and child.ActionText
+                                    and child.ActionText:find("Steal")
+                                then
+                                    nearestPrompt = child
+                                    nearestDist   = dist
+                                    nearestName   = pod.Name
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
             end)
         end
-    end)
-    frame.InputChanged:Connect(function(i)
-        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
-                      or i.UserInputType == Enum.UserInputType.Touch) then
-            local d = i.Position - dragStart
-            frame.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + d.X,
-                startPos.Y.Scale, startPos.Y.Offset + d.Y)
-        end
-    end)
+    end
+    return nearestPrompt, nearestDist, nearestName
 end
 
-local function isGamepad(kc)
-    local n = kc.Name
-    return n:sub(1,6)=="Button" or n:sub(1,10)=="Thumbstick"
-        or n:sub(1,4)=="DPad" or n=="ButtonSelect" or n=="ButtonStart"
-end
+local function executeSteal(prompt, podName)
+    if isStealing then return end
+    if not prompt then return end
+    if not Steal.Data[prompt] then
+        Steal.Data[prompt] = { hold = {}, trigger = {}, ready = true }
+        pcall(function()
+            if getconnections then
+                for _, c in ipairs(getconnections(prompt.PromptButtonHoldBegan)) do
+                    if c.Function then table.insert(Steal.Data[prompt].hold, c.Function) end
+                end
+                for _, c in ipairs(getconnections(prompt.Triggered)) do
+                    if c.Function then table.insert(Steal.Data[prompt].trigger, c.Function) end
+                end
+            end
+        end)
+    end
+    local data = Steal.Data[prompt]
+    if not data.ready then return end
+    data.ready   = false
+    isStealing   = true
+    stealStartTime = tick()
+    stealBarForce  = nil
+    stealBarStatus = nil
+    normalStealProgress = 0
+    normalStealPaused   = false
+    pcall(function() getgenv()._AS_StealProgress = 0 end)
+    if progressFill then progressFill.Size = UDim2.new(0, 0, 1, 0) end
+    if progressPct  then progressPct.Text  = "0%" end
 
-local BLACKLISTED = {
-    [Enum.KeyCode.Escape]      = true,
-    [Enum.KeyCode.LeftControl] = true,
-    [Enum.KeyCode.Unknown]     = true,
-}
+    task.spawn(function()
+        for _, f in ipairs(data.hold) do task.spawn(f) end
+        pcall(function()
+            if prompt.InputHoldBegin then prompt:InputHoldBegin() end
+        end)
 
--- ══════════════════════════════════════════════════════════════════════
--- Crow image IDs
-local CROW_IMAGE_IDS = {
-    "rbxassetid://118953269416540",
-    "rbxassetid://128085595627413",
-    "rbxassetid://120663379122080",
-    "rbxassetid://71944223395764",
-}
+        local startTime    = tick()
+        local duration     = tonumber(Steal.StealDuration) or 1.3
+        if duration <= 0 then duration = 1.3 end
+        local stopEnabled  = autoGrabStopEnabled == true
+        local stopTime     = tonumber(autoGrabStopTime) or 1.1
+        local delayRadius  = tonumber(autoGrabSetDelayRadius) or 0
 
--- MAIN WINDOW
--- ══════════════════════════════════════════════════════════════════════
-local MAIN_W, MAIN_H = 220, 108
-
-local mainFrame = Instance.new("Frame")
-mainFrame.Name             = "MainFrame"
-mainFrame.Size             = UDim2.new(0, MAIN_W, 0, MAIN_H)
-mainFrame.Position         = UDim2.new(0.5, -MAIN_W/2, 0.5, -MAIN_H/2)
-mainFrame.BackgroundColor3 = Color3.fromRGB(8,8,8)
-mainFrame.BackgroundTransparency = 0.62
-mainFrame.BorderSizePixel  = 0
-mainFrame.Active           = true
-mainFrame.ClipsDescendants = true
-mainFrame.Parent           = screen
-
-local mainCrowBackground = Instance.new("ImageLabel")
-mainCrowBackground.Name = "CrowBackground"
-mainCrowBackground.Size = UDim2.fromScale(1, 1)
-mainCrowBackground.Position = UDim2.fromScale(0, 0)
-mainCrowBackground.BackgroundTransparency = 1
-mainCrowBackground.Image = CROW_IMAGE_IDS[1]
-mainCrowBackground.ImageTransparency = 0.55
-mainCrowBackground.ScaleType = Enum.ScaleType.Crop
-mainCrowBackground.ZIndex = 1
-mainCrowBackground.Parent = mainFrame
-Instance.new("UICorner", mainCrowBackground).CornerRadius = UDim.new(0, 12)
-Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 12)
-
-local mainStroke = Instance.new("UIStroke", mainFrame)
-mainStroke.Color        = C.white
-mainStroke.Thickness    = 1.4
-mainStroke.Transparency = 0.78
-
--- Draggable state / lock button
-local guiLocked = false
-local function makeDraggable(frame)
-    local dragging, dragStart, startPos
-    frame.InputBegan:Connect(function(i)
-        if guiLocked then return end
-        if i.UserInputType == Enum.UserInputType.MouseButton1
-        or i.UserInputType == Enum.UserInputType.Touch then
-            dragging  = true
-            dragStart = i.Position
-            startPos  = frame.Position
-            i.Changed:Connect(function()
-                if i.UserInputState == Enum.UserInputState.End then dragging = false end
+        local function promptPos()
+            local ok, pos = pcall(function()
+                if prompt.Parent and prompt.Parent.Parent and prompt.Parent.Parent:IsA("BasePart") then
+                    return prompt.Parent.Parent.Position
+                end
+                return nil
             end)
+            return ok and pos or nil
         end
-    end)
-    frame.InputChanged:Connect(function(i)
-        if guiLocked then return end
-        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
-                      or i.UserInputType == Enum.UserInputType.Touch) then
-            local d = i.Position - dragStart
-            frame.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + d.X,
-                startPos.Y.Scale, startPos.Y.Offset + d.Y)
+
+        local function fireTriggers()
+            for _, f in ipairs(data.trigger) do task.spawn(f) end
+            pcall(function() if fireproximityprompt then fireproximityprompt(prompt) end end)
+            pcall(function() if prompt.InputHoldEnd then prompt:InputHoldEnd() end end)
         end
-    end)
-end
-makeDraggable(mainFrame)
 
--- Header
-local header = Instance.new("Frame", mainFrame)
-header.Size             = UDim2.new(1,0,0,36)
-header.BackgroundColor3 = Color3.fromRGB(255,255,255)
-header.BackgroundTransparency = 0.93
-header.BorderSizePixel  = 0
-header.ZIndex           = 2
-Instance.new("UICorner", header).CornerRadius = UDim.new(0,12)
+        if stopEnabled then
+            while isStealing and Steal.AutoStealEnabled do
+                local elapsed = tick() - startTime
+                local prog    = math.clamp(elapsed / duration, 0, 1)
+                normalStealProgress = prog
+                pcall(function() getgenv()._AS_StealProgress = prog end)
+                if elapsed >= stopTime then break end
+                if not prompt.Parent or not prompt.Parent.Parent then break end
+                local char = LP.Character
+                local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+                local pos  = promptPos()
+                if hrp and pos and (hrp.Position - pos).Magnitude > (Steal.StealRadius or 60) then break end
+                task.wait()
+            end
 
-local headerFill = Instance.new("Frame", mainFrame)
-headerFill.Size = UDim2.new(1,0,0,8)
-headerFill.Position = UDim2.new(0,0,0,28)
-headerFill.BackgroundColor3 = Color3.fromRGB(255,255,255)
-headerFill.BackgroundTransparency = 0.93
-headerFill.BorderSizePixel = 0
-headerFill.ZIndex = 2
+            local stopProgress  = math.clamp(stopTime / duration, 0, 1)
+            normalStealProgress = stopProgress
+            normalStealPaused   = true
+            pcall(function() getgenv()._AS_StealProgress = stopProgress end)
 
-local titleLbl = Instance.new("TextLabel", header)
-titleLbl.Size = UDim2.new(1,-92,0,18)
-titleLbl.Position = UDim2.new(0,10,0,9)
-titleLbl.BackgroundTransparency = 1
-titleLbl.Text = "LIGHT HUB PING LAGGER"
-titleLbl.TextColor3 = C.white
-titleLbl.Font = Enum.Font.GothamBlack
-titleLbl.TextSize = 10
-titleLbl.TextXAlignment = Enum.TextXAlignment.Left
-titleLbl.ZIndex = 3
+            local phase2Timeout = math.max(2.99 - stopTime - math.max(duration - stopTime, 0), 0.05)
+            local phase2Start   = tick()
+            while isStealing and Steal.AutoStealEnabled do
+                if tick() - phase2Start >= phase2Timeout then
+                    data.ready     = true
+                    isStealing     = false
+                    stealStartTime = nil
+                    normalStealPaused = false
+                    task.wait()
+                    executeSteal(prompt, podName)
+                    return
+                end
+                if not prompt.Parent or not prompt.Parent.Parent then
+                    isStealing    = false
+                    data.ready    = true
+                    stealStartTime = nil
+                    normalStealPaused = false
+                    return
+                end
+                local char = LP.Character
+                local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+                local pos  = promptPos()
+                if hrp and pos then
+                    local dist = (hrp.Position - pos).Magnitude
+                    if dist <= delayRadius then
+                        break
+                    elseif dist > (Steal.StealRadius or 60) then
+                        isStealing    = false
+                        data.ready    = true
+                        stealStartTime = nil
+                        normalStealPaused = false
+                        return
+                    end
+                end
+                task.wait()
+            end
 
--- Activate / Deactivate control in the former Lagger bar position
-local activateBtn = Instance.new("TextButton", mainFrame)
-activateBtn.Name = "ActivateButton"
-activateBtn.Size = UDim2.new(1,-20,0,25)
-activateBtn.Position = UDim2.new(0,10,0,40)
-activateBtn.BackgroundColor3 = Color3.fromRGB(0,0,0)
-activateBtn.BackgroundTransparency = 0.08
-activateBtn.BorderSizePixel = 0
-activateBtn.AutoButtonColor = false
-activateBtn.Text = "ACTIVATE"
-activateBtn.TextColor3 = Color3.fromRGB(255,255,255)
-activateBtn.Font = Enum.Font.GothamBlack
-activateBtn.TextSize = 9
-activateBtn.ZIndex = 4
-Instance.new("UICorner", activateBtn).CornerRadius = UDim.new(0,8)
-
--- Lock button
-local lockBtn = Instance.new("TextButton", header)
-lockBtn.Size = UDim2.new(0,24,0,24)
-lockBtn.Position = UDim2.new(1,-31,0.5,-12)
-lockBtn.BackgroundColor3 = Color3.fromRGB(255,255,255)
-lockBtn.BackgroundTransparency = 1
-lockBtn.BorderSizePixel = 0
-lockBtn.AutoButtonColor = false
-lockBtn.Text = "🔓"
-lockBtn.TextColor3 = C.white
-lockBtn.Font = Enum.Font.GothamBlack
-lockBtn.TextSize = 12
-lockBtn.ZIndex = 4
-Instance.new("UICorner", lockBtn).CornerRadius = UDim.new(0,6)
-lockBtn.MouseButton1Click:Connect(function()
-    guiLocked = not guiLocked
-    lockBtn.Text = guiLocked and "🔒" or "🔓"
-    lockBtn.BackgroundTransparency = 1
-end)
-
--- Preset buttons: LOW / MID / HIGH
-local presetNames = {"LOW", "MID", "HIGH"}
-local presetButtons = {}
-local selectedPreset = "LOW"
-local presetValues = {LOW = 25000, MID = 50000, HIGH = 100000}
-
-local function setPreset(name)
-    selectedPreset = name
-    if presetValues[name] then cfg.power = presetValues[name] end
-    saveConfig()
-    for n,b in pairs(presetButtons) do
-        b.BackgroundColor3 = (n == selectedPreset) and Color3.fromRGB(0,0,0) or Color3.fromRGB(255,255,255)
-        b.BackgroundTransparency = (n == selectedPreset) and 0.08 or 0.82
-        b.TextColor3 = (n == selectedPreset) and Color3.fromRGB(255,255,255) or Color3.fromRGB(10,10,10)
-    end
-end
-
-for i,name in ipairs(presetNames) do
-    local b = Instance.new("TextButton", mainFrame)
-    -- Three presets with equal size and a small gap between each button.
-    local presetGap = 5
-    local presetWidth = ((MAIN_W - 20) - (presetGap * (#presetNames - 1))) / #presetNames
-    b.Size = UDim2.new(0,presetWidth,0,22)
-    b.Position = UDim2.new(0,10 + (i-1)*(presetWidth + presetGap),0,72)
-    b.BackgroundColor3 = Color3.fromRGB(255,255,255)
-    b.BackgroundTransparency = 0.82
-    b.BorderSizePixel = 0
-    b.AutoButtonColor = false
-    b.Text = name
-    b.TextColor3 = Color3.fromRGB(10,10,10)
-    b.Font = Enum.Font.GothamBlack
-    b.TextSize = 8
-    b.ZIndex = 4
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0,7)
-    presetButtons[name] = b
-    b.MouseButton1Click:Connect(function() setPreset(name) end)
-end
-setPreset("LOW")
-
--- Settings button remains available
-local settingsEmojiBtn = Instance.new("TextButton", header)
-settingsEmojiBtn.Size = UDim2.new(0,22,0,22)
-settingsEmojiBtn.Position = UDim2.new(1,-57,0.5,-11)
-settingsEmojiBtn.BackgroundColor3 = Color3.fromRGB(255,255,255)
-settingsEmojiBtn.BackgroundTransparency = 1
-settingsEmojiBtn.BorderSizePixel = 0
-settingsEmojiBtn.AutoButtonColor = false
-settingsEmojiBtn.Text = "⚙"
-settingsEmojiBtn.TextColor3 = C.white
-settingsEmojiBtn.Font = Enum.Font.GothamBlack
-settingsEmojiBtn.TextSize = 12
-settingsEmojiBtn.ZIndex = 23
--- No background plate behind the settings icon
-
--- SETTINGS PANEL (with Auto Brainrot toggle)
--- ══════════════════════════════════════════════════════════════════════
-local SET_W, SET_H = 220, 244
-
-local settingsFrame = Instance.new("Frame")
-settingsFrame.Name             = "SettingsPanel"
-settingsFrame.Size             = UDim2.new(0,SET_W,0,SET_H)
-settingsFrame.Position         = UDim2.new(0.5,-SET_W/2,0.5,60)
-settingsFrame.BackgroundColor3 = C.panel
-settingsFrame.BackgroundTransparency = T.panel
-settingsFrame.BorderSizePixel  = 0
-settingsFrame.Active           = true
-settingsFrame.ClipsDescendants = true
-settingsFrame.Visible          = false
-settingsFrame.ZIndex           = 20
-settingsFrame.Parent           = screen
-
-local settingsCrowBackground = Instance.new("ImageLabel")
-settingsCrowBackground.Name = "CrowBackground"
-settingsCrowBackground.Size = UDim2.fromScale(1, 1)
-settingsCrowBackground.Position = UDim2.fromScale(0, 0)
-settingsCrowBackground.BackgroundTransparency = 1
-settingsCrowBackground.Image = CROW_IMAGE_IDS[1]
-settingsCrowBackground.ImageTransparency = 0.55
-settingsCrowBackground.ScaleType = Enum.ScaleType.Crop
-settingsCrowBackground.ZIndex = 20
-settingsCrowBackground.Parent = settingsFrame
-Instance.new("UICorner", settingsCrowBackground).CornerRadius = UDim.new(0, 12)
-
-Instance.new("UICorner", settingsFrame).CornerRadius = UDim.new(0,12)
-applyGradient(settingsFrame, C.panel, Color3.fromRGB(10,10,10), 160)
-
-local setStroke = Instance.new("UIStroke", settingsFrame)
-setStroke.Color        = C.glow
-setStroke.Thickness    = 1.4
-setStroke.Transparency = 0.68
-
-makeDraggable(settingsFrame)
-
--- Settings header
-local setHeader = Instance.new("Frame", settingsFrame)
-setHeader.Size             = UDim2.new(1,0,0,32)
-setHeader.BackgroundColor3 = C.glow
-setHeader.BackgroundTransparency = T.header
-setHeader.BorderSizePixel  = 0
-setHeader.ZIndex           = 21
-Instance.new("UICorner", setHeader).CornerRadius = UDim.new(0,12)
-applyGradient(setHeader, C.glow, C.purple1, 135)
-
-local setHeaderFill = Instance.new("Frame", settingsFrame)
-setHeaderFill.Size             = UDim2.new(1,0,0,8)
-setHeaderFill.Position         = UDim2.new(0,0,0,24)
-setHeaderFill.BackgroundColor3 = C.glow
-setHeaderFill.BackgroundTransparency = T.header
-setHeaderFill.BorderSizePixel  = 0
-setHeaderFill.ZIndex           = 21
-applyGradient(setHeaderFill, C.glow, C.purple1, 135)
-
-local setTitle = Instance.new("TextLabel", setHeader)
-setTitle.Size               = UDim2.new(1,-80,1,0)
-setTitle.Position           = UDim2.new(0,10,0,0)
-setTitle.BackgroundTransparency = 1
-setTitle.Text               = "Settings"
-setTitle.TextColor3         = C.white
-setTitle.Font               = Enum.Font.GothamBlack
-setTitle.TextSize           = 11
-setTitle.TextXAlignment     = Enum.TextXAlignment.Left
-setTitle.ZIndex             = 22
-
-local setCloseBtn = Instance.new("TextButton", setHeader)
-setCloseBtn.Size             = UDim2.new(0,24,0,24)
-setCloseBtn.Position         = UDim2.new(1,-28,0.5,-12)
-setCloseBtn.BackgroundColor3 = Color3.fromRGB(35,35,35)
-setCloseBtn.BackgroundTransparency = 0.15
-setCloseBtn.BorderSizePixel  = 0
-setCloseBtn.AutoButtonColor  = false
-setCloseBtn.Text             = "X"
-setCloseBtn.TextColor3       = C.white
-setCloseBtn.Font             = Enum.Font.GothamBlack
-setCloseBtn.TextSize         = 11
-setCloseBtn.ZIndex           = 23
-Instance.new("UICorner", setCloseBtn).CornerRadius = UDim.new(0,6)
-setCloseBtn.MouseEnter:Connect(function() tw(setCloseBtn,{BackgroundColor3=C.red},0.1) end)
-setCloseBtn.MouseLeave:Connect(function() tw(setCloseBtn,{BackgroundColor3=Color3.fromRGB(35,35,35)},0.1) end)
-
--- ── Value input row builder ─────────────────────────────────
-local function mkInputRow(yPos, labelText, getValue, onConfirm)
-    local row = Instance.new("Frame", settingsFrame)
-    row.Size             = UDim2.new(1,-16,0,34)
-    row.Position         = UDim2.new(0,8,0,yPos)
-    row.BackgroundColor3 = C.card
-    row.BackgroundTransparency = T.card
-    row.BorderSizePixel  = 0
-    row.ZIndex           = 21
-    Instance.new("UICorner", row).CornerRadius = UDim.new(0,8)
-    local rs = Instance.new("UIStroke",row); rs.Color=C.glow; rs.Thickness=1; rs.Transparency=0.78
-
-    local lbl = Instance.new("TextLabel", row)
-    lbl.Size               = UDim2.new(0.45,0,1,0)
-    lbl.Position           = UDim2.new(0,10,0,0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text               = labelText
-    lbl.TextColor3         = C.white
-    lbl.Font               = Enum.Font.GothamBold
-    lbl.TextSize           = 10
-    lbl.TextXAlignment     = Enum.TextXAlignment.Left
-    lbl.ZIndex             = 22
-
-    local box = Instance.new("TextBox", row)
-    box.Size               = UDim2.new(0,64,0,24)
-    box.Position           = UDim2.new(1,-72,0.5,-12)
-    box.BackgroundColor3   = C.inputBg
-    box.BackgroundTransparency = T.inputBg
-    box.BorderSizePixel    = 0
-    box.Text               = tostring(getValue())
-    box.TextColor3         = C.purple3
-    box.Font               = Enum.Font.GothamBold
-    box.TextSize           = 11
-    box.ClearTextOnFocus   = false
-    box.ZIndex             = 23
-    Instance.new("UICorner", box).CornerRadius = UDim.new(0,6)
-
-    local bs = Instance.new("UIStroke",box); bs.Color=C.glow; bs.Thickness=1; bs.Transparency=0.5
-
-    box.Focused:Connect(function()   tw(bs,{Color=C.purple2,Transparency=0},0.12) end)
-    box.FocusLost:Connect(function()
-        tw(bs,{Color=C.glow,Transparency=0.5},0.12)
-        local n = tonumber(box.Text)
-        if n then
-            onConfirm(n)
-            box.Text = tostring(getValue())
-            saveConfig()
+            if isStealing and Steal.AutoStealEnabled then
+                normalStealPaused = false
+                local fillStart    = tick()
+                local fillDuration = math.max(duration - stopTime, 0.05)
+                while true do
+                    local fp   = math.clamp((tick() - fillStart) / fillDuration, 0, 1)
+                    local prog = stopProgress + fp * (1 - stopProgress)
+                    normalStealProgress = prog
+                    pcall(function() getgenv()._AS_StealProgress = prog end)
+                    if fp >= 1 then break end
+                    task.wait()
+                end
+                fireTriggers()
+            end
         else
-            box.Text = tostring(getValue())
-        end
-    end)
-
-    return box
-end
-
--- ── Keybind row builder ──────────────────────────────────────
-local kbBindBtn, gpBindBtn
-
-local function displayGamepadKey(key)
-    return (key or ""):gsub("^Button", "")
-end
-
-local function updateKbLabels()
-    if kbBindBtn then
-        if listeningFor == "kb" then
-            kbBindBtn.Text      = "Press a key..."
-            kbBindBtn.TextColor3 = C.waiting
-        else
-            kbBindBtn.Text      = cfg.keybindKb ~= "" and cfg.keybindKb or "None"
-            kbBindBtn.TextColor3 = C.purple3
-        end
-    end
-    if gpBindBtn then
-        if listeningFor == "gp" then
-            gpBindBtn.Text      = "Press a button..."
-            gpBindBtn.TextColor3 = C.waiting
-        else
-            gpBindBtn.Text      = cfg.keybindGp ~= "" and displayGamepadKey(cfg.keybindGp) or "None"
-            gpBindBtn.TextColor3 = C.purple3
-        end
-    end
-end
-
-local function mkKeybindRow(yPos, labelText, which)
-    local row = Instance.new("Frame", settingsFrame)
-    row.Size             = UDim2.new(1,-16,0,34)
-    row.Position         = UDim2.new(0,8,0,yPos)
-    row.BackgroundColor3 = C.card
-    row.BackgroundTransparency = T.card
-    row.BorderSizePixel  = 0
-    row.ZIndex           = 21
-    Instance.new("UICorner", row).CornerRadius = UDim.new(0,8)
-    local rs = Instance.new("UIStroke",row); rs.Color=C.glow; rs.Thickness=1; rs.Transparency=0.78
-
-    local lbl = Instance.new("TextLabel", row)
-    lbl.Size               = UDim2.new(0.4,0,1,0)
-    lbl.Position           = UDim2.new(0,10,0,0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text               = labelText
-    lbl.TextColor3         = C.white
-    lbl.Font               = Enum.Font.GothamBold
-    lbl.TextSize           = 10
-    lbl.TextXAlignment     = Enum.TextXAlignment.Left
-    lbl.ZIndex             = 22
-
-    local bindBtn = Instance.new("TextButton", row)
-    bindBtn.Size             = UDim2.new(0,88,0,24)
-    bindBtn.Position         = UDim2.new(1,-98,0.5,-12)
-    bindBtn.BackgroundColor3 = C.inputBg
-    bindBtn.BackgroundTransparency = T.inputBg
-    bindBtn.BorderSizePixel  = 0
-    bindBtn.AutoButtonColor  = false
-    bindBtn.Font             = Enum.Font.GothamBold
-    bindBtn.TextSize         = 9
-    bindBtn.TextColor3       = C.purple3
-    bindBtn.ZIndex           = 23
-    bindBtn.Text             = which == "kb" and cfg.keybindKb or displayGamepadKey(cfg.keybindGp)
-    Instance.new("UICorner", bindBtn).CornerRadius = UDim.new(0,6)
-
-    local bStr = Instance.new("UIStroke",bindBtn); bStr.Color=C.glow; bStr.Thickness=1; bStr.Transparency=0.5
-    bindBtn.MouseEnter:Connect(function() tw(bStr,{Color=C.purple2,Transparency=0},0.1) end)
-    bindBtn.MouseLeave:Connect(function() tw(bStr,{Color=C.glow,Transparency=0.5},0.1) end)
-
-    bindBtn.MouseButton1Click:Connect(function()
-        listeningFor = (listeningFor == which) and nil or which
-        updateKbLabels()
-    end)
-
-    if which == "kb" then kbBindBtn = bindBtn end
-    if which == "gp" then gpBindBtn = bindBtn end
-
-    return bindBtn
-end
-
--- ── Auto Brainrot toggle row ────────────────────────────────
-local autoBrainrotBtn -- will be referenced later
-
-local function createBrainrotRow(yPos)
-    local row = Instance.new("Frame", settingsFrame)
-    row.Size             = UDim2.new(1,-16,0,34)
-    row.Position         = UDim2.new(0,8,0,yPos)
-    row.BackgroundColor3 = C.card
-    row.BackgroundTransparency = T.card
-    row.BorderSizePixel  = 0
-    row.ZIndex           = 21
-    Instance.new("UICorner", row).CornerRadius = UDim.new(0,8)
-    local rs = Instance.new("UIStroke",row); rs.Color=C.glow; rs.Thickness=1; rs.Transparency=0.78
-
-    local lbl = Instance.new("TextLabel", row)
-    lbl.Size               = UDim2.new(0.7,0,1,0)
-    lbl.Position           = UDim2.new(0,10,0,0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text               = "Auto Brainrot"
-    lbl.TextColor3         = C.white
-    lbl.Font               = Enum.Font.GothamBold
-    lbl.TextSize           = 10
-    lbl.TextXAlignment     = Enum.TextXAlignment.Left
-    lbl.ZIndex             = 22
-
-    local toggleBtn = Instance.new("TextButton", row)
-    toggleBtn.Size             = UDim2.new(0,94,0,24)
-    toggleBtn.Position         = UDim2.new(1,-102,0.5,-12)
-    toggleBtn.BackgroundColor3 = cfg.autoBrainrot and Color3.fromRGB(255,255,255) or Color3.fromRGB(0,0,0)
-    toggleBtn.BorderSizePixel  = 0
-    toggleBtn.AutoButtonColor  = false
-    toggleBtn.Text             = cfg.autoBrainrot and "ACTIVATE" or "DÉSACTIVATE"
-    toggleBtn.TextColor3       = cfg.autoBrainrot and Color3.fromRGB(0,0,0) or Color3.fromRGB(255,255,255)
-    toggleBtn.Font             = Enum.Font.GothamBlack
-    toggleBtn.TextSize         = 9
-    toggleBtn.ZIndex           = 23
-    Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(1,0)
-
-    local tStr = Instance.new("UIStroke", toggleBtn)
-    tStr.Color = C.glow; tStr.Thickness = 1; tStr.Transparency = 0.72
-
-    toggleBtn.MouseButton1Click:Connect(function()
-        cfg.autoBrainrot = not cfg.autoBrainrot
-        toggleBtn.Text = cfg.autoBrainrot and "ACTIVATE" or "DÉSACTIVATE"
-        toggleBtn.TextColor3 = cfg.autoBrainrot and Color3.fromRGB(0,0,0) or Color3.fromRGB(255,255,255)
-        tw(toggleBtn, {BackgroundColor3 = cfg.autoBrainrot and Color3.fromRGB(255,255,255) or Color3.fromRGB(0,0,0)}, 0.15)
-        saveConfig()
-    end)
-
-    autoBrainrotBtn = toggleBtn
-    return toggleBtn
-end
-
--- Build rows (adjusted Y positions)
-local Y = 36  -- start lower
-local GAP = 6
-
-local powerBox = mkInputRow(Y, "Power", function() return cfg.power end, function(v)
-    cfg.power = math.max(1, v)
-end)
-Y = Y + 34 + GAP
-
--- Insert Auto Brainrot row here (above keybinds)
-createBrainrotRow(Y)
-Y = Y + 34 + GAP
-
--- Divider + section label
-local div = Instance.new("Frame", settingsFrame)
-div.Size             = UDim2.new(1,-16,0,1)
-div.Position         = UDim2.new(0,8,0,Y)
-div.BackgroundColor3 = C.glow
-div.BorderSizePixel  = 0
-div.BackgroundTransparency = 0.5
-div.ZIndex           = 21
-Y = Y + 8
-
-local kbSectLbl = Instance.new("TextLabel", settingsFrame)
-kbSectLbl.Size               = UDim2.new(1,-16,0,16)
-kbSectLbl.Position           = UDim2.new(0,8,0,Y)
-kbSectLbl.BackgroundTransparency = 1
-kbSectLbl.Text               = "KEYBIND / CONTROLOR"
-kbSectLbl.TextColor3         = C.dim
-kbSectLbl.Font               = Enum.Font.GothamBold
-kbSectLbl.TextSize           = 8
-kbSectLbl.TextXAlignment     = Enum.TextXAlignment.Left
-kbSectLbl.ZIndex             = 21
-Y = Y + 16
-
-mkKeybindRow(Y, "Keyboard",   "kb"); Y = Y + 34 + GAP
-mkKeybindRow(Y, "Controller", "gp"); Y = Y + 34 + GAP
-
--- ══════════════════════════════════════════════════════════════════════
--- SETTINGS OPEN / CLOSE
--- ══════════════════════════════════════════════════════════════════════
-local settingsOpen = false
-
-local function openSettings()
-    settingsOpen          = true
-    settingsFrame.Visible = true
-    settingsFrame.Size    = UDim2.new(0,SET_W,0,0)
-    tw(settingsFrame, {Size=UDim2.new(0,SET_W,0,SET_H)}, 0.2)
-    tw(settingsEmojiBtn, {BackgroundColor3=C.purple1}, 0.12)
-    powerBox.Text    = tostring(cfg.power)
-    updateKbLabels()
-    -- update brainrot toggle label/color
-    if autoBrainrotBtn then
-        autoBrainrotBtn.Text = cfg.autoBrainrot and "ACTIVATE" or "DÉSACTIVATE"
-        autoBrainrotBtn.BackgroundColor3 = cfg.autoBrainrot and Color3.fromRGB(255,255,255) or Color3.fromRGB(0,0,0)
-        autoBrainrotBtn.TextColor3 = cfg.autoBrainrot and Color3.fromRGB(0,0,0) or Color3.fromRGB(255,255,255)
-    end
-end
-
-local function closeSettings()
-    settingsOpen = false
-    listeningFor = nil
-    updateKbLabels()
-    tw(settingsFrame, {Size=UDim2.new(0,SET_W,0,0)}, 0.16)
-    task.delay(0.18, function() settingsFrame.Visible = false end)
-    tw(settingsEmojiBtn, {BackgroundColor3=Color3.fromRGB(35,35,35)}, 0.12)
-    hideConfirm()
-end
-
-settingsEmojiBtn.MouseButton1Click:Connect(function()
-    if settingsOpen then closeSettings() else openSettings() end
-end)
-setCloseBtn.MouseButton1Click:Connect(closeSettings)
-
--- ══════════════════════════════════════════════════════════════════════
--- PING LAGGER LOGIC
--- ══════════════════════════════════════════════════════════════════════
-
-local function findRemote()
-    local rrs = game:FindFirstChild("RobloxReplicatedStorage")
-    if not rrs then return nil end
-    local remote
-    for _, name in ipairs({"SetPlayerBlockList","UpdatePlayerBlockList","SetBlockList","UpdateBlockList"}) do
-        local r = rrs:FindFirstChild(name)
-        if r and r:IsA("RemoteEvent") then remote = r break end
-    end
-    if not remote then
-        for _, c in ipairs(rrs:GetChildren()) do
-            if c:IsA("RemoteEvent") and c.Name:find("Block") then remote = c break end
-        end
-    end
-    return remote
-end
-
-remote = findRemote()
-
-local function buildPayload(power)
-    local main = {}
-    local nested = {{}}
-    local current = nested[1]
-    for _ = 1, 186 do
-        local n = {}
-        table.insert(current, n)
-        current = n
-    end
-    local maxRep = math.min(math.floor(power / 188), 10000)
-    for _ = 1, maxRep do
-        table.insert(main, nested)
-    end
-    return main
-end
-
-local function runPingLoop()
-    local delay = cfg.interval
-    while active and remote do
-        local payload = buildPayload(cfg.power)
-        local ok = pcall(function() remote:FireServer(payload) end)
-        if not ok then
-            delay = math.min(delay * 1.5, 0.5)
-        else
-            delay = math.max(delay * 0.995, 0.05)
-        end
-        task.wait(delay)
-    end
-end
-
-local function flipLag(state, isManual)
-    active = state
-
-    if isManual then
-        if brainrotMode then
-            manualOverride = not state
-        else
-            manualOverride = false
-        end
-    end
-
-    if active then
-        if not remote then
-            remote = findRemote()
-            if not remote then
-                active = false
-                flipLag(false)
-                return
+            while isStealing and Steal.AutoStealEnabled do
+                local elapsed  = tick() - startTime
+                local progress = math.clamp(elapsed / duration, 0, 1)
+                normalStealProgress = progress
+                pcall(function() getgenv()._AS_StealProgress = progress end)
+                if not prompt.Parent or not prompt.Parent.Parent then break end
+                local char = LP.Character
+                local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+                local pos  = promptPos()
+                if hrp and pos and (hrp.Position - pos).Magnitude > (Steal.StealRadius or 60) then break end
+                if elapsed >= duration then
+                    fireTriggers()
+                    break
+                end
+                task.wait()
             end
         end
-        activateBtn.Text = "DÉSACTIVATE"
-        activateBtn.BackgroundColor3 = Color3.fromRGB(255,255,255)
-        activateBtn.BackgroundTransparency = 0.08
-        activateBtn.TextColor3 = Color3.fromRGB(0,0,0)
-        mainStroke.Color            = C.white
-        mainStroke.Transparency     = 0.1
-        task.spawn(runPingLoop)
+
+        normalStealProgress = 0
+        pcall(function() getgenv()._AS_StealProgress = 0 end)
+        if progressFill then progressFill.Size = UDim2.new(0, 0, 1, 0) end
+        if progressPct  then progressPct.Text  = "0%" end
+        data.ready     = true
+        isStealing     = false
+        stealStartTime = nil
+        normalStealPaused = false
+        stealBarForce  = nil
+        stealBarStatus = nil
+    end)
+end
+
+local startAutoSteal, stopAutoSteal
+
+startAutoSteal = function()
+    Steal.AutoStealEnabled = true
+    if Conns.autoSteal then
+        pcall(function() Conns.autoSteal:Disconnect() end)
+        Conns.autoSteal = nil
+    end
+    Conns.autoSteal = RunService.Heartbeat:Connect(function()
+        if not Steal.AutoStealEnabled or isStealing then return end
+        local p, _, n = findNearestPrompt()
+        if p then executeSteal(p, n) end
+    end)
+end
+
+stopAutoSteal = function()
+    Steal.AutoStealEnabled = false
+    if Conns.autoSteal then
+        pcall(function() Conns.autoSteal:Disconnect() end)
+        Conns.autoSteal = nil
+    end
+    isStealing          = false
+    stealStartTime      = nil
+    normalStealProgress = 0
+    normalStealPaused   = false
+    stealBarForce       = nil
+    stealBarStatus      = nil
+    pcall(function() getgenv()._AS_StealProgress = 0 end)
+    if progressFill then
+        pcall(function()
+            TweenService:Create(progressFill, TweenInfo.new(0.2), { Size = UDim2.new(0, 0, 1, 0) }):Play()
+        end)
+    end
+    if progressPct then progressPct.Text = "0%" end
+end
+
+local opConnection = nil
+local opPromptData = {}
+local startSemiAutoSteal, stopSemiAutoSteal
+
+local function opIsMyPlot(plot)
+    local sign     = plot and plot:FindFirstChild("PlotSign")
+    local yourBase = sign and sign:FindFirstChild("YourBase")
+    return yourBase and yourBase:IsA("BillboardGui") and yourBase.Enabled == true
+end
+
+local function opPromptPosition(prompt)
+    local attachment = prompt and prompt.Parent
+    local spawn      = attachment and attachment.Parent
+    return spawn and spawn:IsA("BasePart") and spawn.Position or nil
+end
+
+local function findNearestOPPrompt()
+    local character   = LP.Character
+    local root        = character and character:FindFirstChild("HumanoidRootPart")
+    local plotsFolder = workspace:FindFirstChild("Plots")
+    if not root or not plotsFolder then return nil end
+    local nearest, minDistance = nil, math.huge
+    for _, plot in ipairs(plotsFolder:GetChildren()) do
+        if not opIsMyPlot(plot) then
+            local podiums = plot:FindFirstChild("AnimalPodiums")
+            if podiums then
+                for _, podium in ipairs(podiums:GetChildren()) do
+                    local base       = podium:FindFirstChild("Base")
+                    local spawn      = base and base:FindFirstChild("Spawn")
+                    local attachment = spawn and spawn:FindFirstChild("PromptAttachment")
+                    if spawn and attachment then
+                        local distance = (spawn.Position - root.Position).Magnitude
+                        if distance <= SemiSteal.CONFIG.RADIUS and distance < minDistance then
+                            for _, child in ipairs(attachment:GetChildren()) do
+                                if child:IsA("ProximityPrompt") and child.Enabled then
+                                    local at = tostring(child.ActionText or "")
+                                    if at == "" or at:find("Steal") then
+                                        nearest, minDistance = child, distance
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+local function finishOPSteal(data, fired)
+    if fired then
+        SemiSteal.State.totalSteals = SemiSteal.State.totalSteals + 1
+        SemiSteal.State.lastResult  = "OP steal completed"
+        stealBarForce   = 1
+        stealBarStatus  = "STOLE"
+        normalStealProgress = 1
+        pcall(function() getgenv()._AS_StealProgress = 1 end)
+        if progressFill then progressFill.Size = UDim2.new(1, 0, 1, 0) end
+        if progressPct  then progressPct.Text  = "100%" end
     else
-        activateBtn.Text = "ACTIVATE"
-        activateBtn.BackgroundColor3 = Color3.fromRGB(0,0,0)
-        activateBtn.BackgroundTransparency = 0.08
-        activateBtn.TextColor3 = Color3.fromRGB(255,255,255)
-        mainStroke.Color            = C.white
-        mainStroke.Transparency     = 0.35
+        SemiSteal.State.failedSteals = SemiSteal.State.failedSteals + 1
+        SemiSteal.State.lastResult   = "OP steal cancelled"
+    end
+    SemiSteal.State.lastResultTime = tick()
+    SemiSteal.State.active   = false
+    SemiSteal.State.progress = 0
+    SemiSteal.State.inRange  = false
+    SemiSteal.State.paused   = false
+    SemiSteal.State.phase    = "idle"
+    isStealing     = false
+    stealStartTime = nil
+    data.ready     = true
+    task.delay(0.05, function()
+        if not isStealing and stealBarForce ~= 1 then
+            normalStealProgress = 0
+            pcall(function() getgenv()._AS_StealProgress = 0 end)
+        end
+    end)
+end
+
+local function executeOPSteal(prompt)
+    if isStealing or not prompt or not prompt.Parent then return end
+    if not opPromptData[prompt] then
+        local data = { hold = {}, trigger = {}, ready = true }
+        if getconnections then
+            local okHold, holdConns = pcall(getconnections, prompt.PromptButtonHoldBegan)
+            if okHold then
+                for _, c in ipairs(holdConns) do
+                    if c.Function then table.insert(data.hold, c.Function) end
+                end
+            end
+            local okTrig, trigConns = pcall(getconnections, prompt.Triggered)
+            if okTrig then
+                for _, c in ipairs(trigConns) do
+                    if c.Function then table.insert(data.trigger, c.Function) end
+                end
+            end
+        end
+        opPromptData[prompt] = data
+    end
+    local data = opPromptData[prompt]
+    if not data.ready then return end
+    data.ready     = false
+    isStealing     = true
+    stealStartTime = tick()
+    local duration = math.max(tonumber(SemiSteal.CONFIG.DURATION) or 1.4, 0.05)
+    SemiSteal.State.active    = true
+    SemiSteal.State.startTime = stealStartTime
+    SemiSteal.State.duration  = duration
+    SemiSteal.State.progress  = 0
+    SemiSteal.State.paused    = false
+    SemiSteal.State.phase     = "holding"
+    SemiSteal.State.inRange   = false
+    if progressFill then progressFill.Size = UDim2.new(0, 0, 1, 0) end
+    if progressPct  then progressPct.Text  = "0%" end
+
+    task.spawn(function()
+        for _, cb in ipairs(data.hold) do task.spawn(cb) end
+        local fired, cancelled = false, false
+
+        local function distFromPrompt()
+            local pos  = opPromptPosition(prompt)
+            local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+            if not pos or not root then return nil end
+            return (root.Position - pos).Magnitude
+        end
+        local function stillRunning()
+            return isStealing and Steal.AutoStealEnabled and stealMode == "op" and prompt.Parent ~= nil
+        end
+
+        if SemiSteal.CONFIG.STOP_TIME_ENABLED then
+            local stopAt
+            if SemiSteal.CONFIG.USE_STOP_PERCENT then
+                local pct = math.clamp(tonumber(SemiSteal.CONFIG.STOP_PERCENT) or 75, 1, 100)
+                stopAt = duration * (pct / 100)
+            else
+                stopAt = math.clamp(tonumber(SemiSteal.CONFIG.STOP_TIME) or 1.29, 0.05, duration)
+            end
+            local started = tick()
+            while stillRunning() do
+                local elapsed  = tick() - started
+                local distance = distFromPrompt()
+                if not distance or distance > SemiSteal.CONFIG.RADIUS then cancelled = true break end
+                SemiSteal.State.inRange  = true
+                SemiSteal.State.progress = math.clamp(elapsed / duration, 0, 1)
+                normalStealProgress      = SemiSteal.State.progress
+                pcall(function() getgenv()._AS_StealProgress = SemiSteal.State.progress end)
+                if elapsed >= stopAt then break end
+                task.wait()
+            end
+            if not stillRunning() then cancelled = true end
+            if not cancelled then
+                local stopProgress = math.clamp(stopAt / duration, 0, 1)
+                SemiSteal.State.progress = stopProgress
+                SemiSteal.State.paused   = true
+                SemiSteal.State.phase    = "waiting"
+                local delayTime    = math.max(2.99 - stopAt - math.max(duration - stopAt, 0), 0.05)
+                local delayStarted = tick()
+                local enteredDelayRadius = false
+                while stillRunning() and tick() - delayStarted < delayTime do
+                    local distance = distFromPrompt()
+                    if not distance or distance > SemiSteal.CONFIG.RADIUS then cancelled = true break end
+                    SemiSteal.State.inRange = distance <= SemiSteal.CONFIG.DELAY_RADIUS
+                    if SemiSteal.State.inRange then enteredDelayRadius = true break end
+                    task.wait()
+                end
+                if not stillRunning() then cancelled = true end
+                if enteredDelayRadius and not cancelled then
+                    SemiSteal.State.paused = false
+                    SemiSteal.State.phase  = "finishing"
+                    local finishStarted = tick()
+                    local remaining     = math.max(duration - stopAt, 0.05)
+                    while stillRunning() do
+                        local fp = math.clamp((tick() - finishStarted) / remaining, 0, 1)
+                        SemiSteal.State.progress = stopProgress + fp * (1 - stopProgress)
+                        normalStealProgress      = SemiSteal.State.progress
+                        pcall(function() getgenv()._AS_StealProgress = SemiSteal.State.progress end)
+                        if fp >= 1 then break end
+                        task.wait()
+                    end
+                    if stillRunning() then
+                        for _, cb in ipairs(data.trigger) do task.spawn(cb) end
+                        fired = true
+                        SemiSteal.State.progress = 1
+                    end
+                end
+            end
+        else
+            local started = tick()
+            while stillRunning() do
+                local elapsed  = tick() - started
+                local distance = distFromPrompt()
+                if not distance or distance > SemiSteal.CONFIG.RADIUS then cancelled = true break end
+                SemiSteal.State.inRange  = true
+                SemiSteal.State.progress = math.clamp(elapsed / duration, 0, 1)
+                normalStealProgress      = SemiSteal.State.progress
+                pcall(function() getgenv()._AS_StealProgress = SemiSteal.State.progress end)
+                if elapsed >= duration then
+                    for _, cb in ipairs(data.trigger) do task.spawn(cb) end
+                    fired = true
+                    SemiSteal.State.progress = 1
+                    break
+                end
+                task.wait()
+            end
+        end
+        task.wait(0.05)
+        finishOPSteal(data, fired)
+    end)
+end
+
+startSemiAutoSteal = function()
+    if opConnection then return end
+    stealMode    = "op"
+    opConnection = RunService.Heartbeat:Connect(function()
+        if not Steal.AutoStealEnabled or stealMode ~= "op" or isStealing or SemiSteal.State.active then return end
+        local prompt = findNearestOPPrompt()
+        if prompt then executeOPSteal(prompt) end
+    end)
+end
+
+stopSemiAutoSteal = function()
+    if opConnection then opConnection:Disconnect() opConnection = nil end
+    for _, d in pairs(opPromptData) do d.ready = true end
+    SemiSteal.State.active   = false
+    SemiSteal.State.progress = 0
+    SemiSteal.State.inRange  = false
+    SemiSteal.State.paused   = false
+    SemiSteal.State.phase    = "idle"
+    isStealing     = false
+    stealStartTime = nil
+end
+
+local function enableGrab()
+    Steal.AutoStealEnabled = true
+    if stealMode == "op" then
+        startSemiAutoSteal()
+    else
+        startAutoSteal()
     end
 end
 
-activateBtn.MouseButton1Click:Connect(function()
-    flipLag(not active, true)
+local function disableGrab()
+    stopAutoSteal()
+    stopSemiAutoSteal()
+    Steal.AutoStealEnabled = false
+end
+
+local gui = Instance.new("ScreenGui")
+gui.Name           = "StandaloneGrab"
+gui.ResetOnSpawn   = false
+gui.IgnoreGuiInset = true
+pcall(function()
+    if gethui then gui.Parent = gethui()
+    else gui.Parent = LP:WaitForChild("PlayerGui") end
+end)
+if not gui.Parent then gui.Parent = LP:WaitForChild("PlayerGui") end
+
+local card = Instance.new("Frame")
+card.Size             = UDim2.new(0, 220, 0, 142)
+card.Position         = UDim2.new(0.5, -110, 0, 80)
+card.BackgroundColor3 = Color3.fromRGB(18, 10, 15)
+card.BorderSizePixel  = 0
+card.Parent           = gui
+Instance.new("UICorner", card).CornerRadius = UDim.new(0, 10)
+local cs = Instance.new("UIStroke", card)
+cs.Color = Color3.fromRGB(255, 105, 180); cs.Thickness = 1.5
+
+local title = Instance.new("TextLabel", card)
+title.Size = UDim2.new(1, 0, 0, 28)
+title.BackgroundTransparency = 1
+title.Text       = "Auto Grab"
+title.TextColor3 = Color3.fromRGB(255, 200, 220)
+title.TextSize   = 13
+title.Font       = Enum.Font.GothamBold
+
+local modeRow = Instance.new("Frame", card)
+modeRow.Size     = UDim2.new(1, -20, 0, 24)
+modeRow.Position = UDim2.new(0, 10, 0, 32)
+modeRow.BackgroundTransparency = 1
+
+local modeLbl = Instance.new("TextLabel", modeRow)
+modeLbl.Size = UDim2.new(0.6, 0, 1, 0)
+modeLbl.BackgroundTransparency = 1
+modeLbl.Text  = "Mode: Normal"
+modeLbl.TextColor3 = Color3.fromRGB(200, 170, 185)
+modeLbl.TextSize   = 11
+modeLbl.Font       = Enum.Font.Gotham
+modeLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local modeBtn = Instance.new("TextButton", modeRow)
+modeBtn.Size     = UDim2.new(0.38, 0, 1, 0)
+modeBtn.Position = UDim2.new(0.62, 0, 0, 0)
+modeBtn.BackgroundColor3 = Color3.fromRGB(50, 25, 40)
+modeBtn.Text       = "NORMAL"
+modeBtn.TextColor3 = Color3.fromRGB(255, 180, 210)
+modeBtn.TextSize   = 10
+modeBtn.Font       = Enum.Font.GothamBold
+Instance.new("UICorner", modeBtn).CornerRadius = UDim.new(0, 6)
+
+local togRow = Instance.new("Frame", card)
+togRow.Size     = UDim2.new(1, -20, 0, 28)
+togRow.Position = UDim2.new(0, 10, 0, 60)
+togRow.BackgroundTransparency = 1
+
+local togLbl = Instance.new("TextLabel", togRow)
+togLbl.Size = UDim2.new(0.6, 0, 1, 0)
+togLbl.BackgroundTransparency = 1
+togLbl.Text  = "Auto Steal: OFF"
+togLbl.TextColor3 = Color3.fromRGB(200, 170, 185)
+togLbl.TextSize   = 11
+togLbl.Font       = Enum.Font.Gotham
+togLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local togBtn = Instance.new("TextButton", togRow)
+togBtn.Size     = UDim2.new(0.38, 0, 1, 0)
+togBtn.Position = UDim2.new(0.62, 0, 0, 0)
+togBtn.BackgroundColor3 = Color3.fromRGB(60, 30, 48)
+togBtn.Text       = "OFF"
+togBtn.TextColor3 = Color3.fromRGB(255, 100, 130)
+togBtn.TextSize   = 11
+togBtn.Font       = Enum.Font.GothamBold
+Instance.new("UICorner", togBtn).CornerRadius = UDim.new(0, 6)
+
+local barOuter = Instance.new("Frame", card)
+barOuter.Size             = UDim2.new(1, -20, 0, 16)
+barOuter.Position         = UDim2.new(0, 10, 0, 96)
+barOuter.BackgroundColor3 = Color3.fromRGB(30, 14, 22)
+barOuter.BorderSizePixel  = 0
+Instance.new("UICorner", barOuter).CornerRadius = UDim.new(0, 8)
+local barStroke = Instance.new("UIStroke", barOuter)
+barStroke.Color = Color3.fromRGB(100, 50, 75); barStroke.Thickness = 1
+
+progressFill = Instance.new("Frame", barOuter)
+progressFill.Size             = UDim2.new(0, 0, 1, 0)
+progressFill.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+progressFill.BorderSizePixel  = 0
+Instance.new("UICorner", progressFill).CornerRadius = UDim.new(0, 8)
+local fillGrad = Instance.new("UIGradient", progressFill)
+fillGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 105, 180)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 200, 230)),
+})
+
+progressPct = Instance.new("TextLabel", barOuter)
+progressPct.Size             = UDim2.new(1, 0, 1, 0)
+progressPct.BackgroundTransparency = 1
+progressPct.Text       = "0%"
+progressPct.TextColor3 = Color3.fromRGB(255, 240, 248)
+progressPct.TextSize   = 10
+progressPct.Font       = Enum.Font.GothamBold
+progressPct.ZIndex     = 3
+
+local smoothFill = 0
+RunService.RenderStepped:Connect(function(dt)
+    local target = math.clamp(normalStealProgress, 0, 1)
+
+    if normalStealPaused then
+        local pulse = 0.5 + 0.5 * math.sin(tick() * 6)
+        progressFill.BackgroundColor3 = Color3.fromRGB(
+            255,
+            math.floor(105 + pulse * 75),
+            math.floor(180 + pulse * 50)
+        )
+    else
+        progressFill.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+    end
+
+    smoothFill = smoothFill + (target - smoothFill) * math.min(dt * 18, 1)
+    progressFill.Size = UDim2.new(smoothFill, 0, 1, 0)
+    progressPct.Text  = math.floor(smoothFill * 100) .. "%"
+
+    if smoothFill >= 0.99 then
+        barStroke.Color = Color3.fromRGB(255, 180, 220)
+        barStroke.Thickness = 1.5
+    else
+        barStroke.Color = Color3.fromRGB(100, 50, 75)
+        barStroke.Thickness = 1
+    end
 end)
 
--- ══════════════════════════════════════════════════════════════════════
--- AUTO BRAINROT DETECTION
--- ══════════════════════════════════════════════════════════════════════
-RunService.Heartbeat:Connect(function()
-    if not cfg.autoBrainrot then
-        -- If auto is off, but brainrotMode is still true from before, we need to reset
-        if brainrotMode then
-            brainrotMode = false
-            lastBrainrotState = false
-            manualOverride = false
-            flipLag(false)
-        end
-        return
+modeBtn.MouseButton1Click:Connect(function()
+    if stealMode == "normal" then
+        stealMode = "op"
+        modeBtn.Text = "OP"
+        modeLbl.Text = "Mode: OP"
+    else
+        stealMode = "normal"
+        modeBtn.Text = "NORMAL"
+        modeLbl.Text = "Mode: Normal"
     end
-
-    local char = plr.Character
-    if not char then return end
-    local hum = char:FindFirstChild("Humanoid")
-    if not hum then return end
-
-    local hasBrainrot = hum.WalkSpeed < 25
-
-    if hasBrainrot and not lastBrainrotState then
-        -- Brainrot acquired
-        brainrotMode = true
-        lastBrainrotState = true
-        manualOverride = false -- fresh pickup clears any prior override
-        flipLag(true)  -- activate lagger
-    elseif not hasBrainrot and lastBrainrotState then
-        -- Brainrot lost
-        brainrotMode = false
-        lastBrainrotState = false
-        manualOverride = false
-        flipLag(false) -- deactivate lagger
+    if Steal.AutoStealEnabled then
+        disableGrab()
+        task.wait(0.05)
+        enableGrab()
     end
 end)
 
--- ══════════════════════════════════════════════════════════════════════
--- INPUT HANDLER
--- ══════════════════════════════════════════════════════════════════════
-UserInputService.InputBegan:Connect(function(input, processed)
-    local kc  = input.KeyCode
-    if kc == Enum.KeyCode.Unknown then return end
-
-    local isGp = isGamepad(kc)
-    local isKb = input.UserInputType == Enum.UserInputType.Keyboard
-
-    if listeningFor then
-        if kc == Enum.KeyCode.Escape then
-            listeningFor = nil
-            updateKbLabels()
-            return
-        end
-        if listeningFor == "kb" and isKb and not BLACKLISTED[kc] then
-            cfg.keybindKb = kc.Name
-            listeningFor  = nil
-            updateKbLabels()
-            saveConfig()
-            return
-        end
-        if listeningFor == "gp" and isGp then
-            cfg.keybindGp = kc.Name
-            listeningFor  = nil
-            updateKbLabels()
-            saveConfig()
-            return
-        end
-        return
-    end
-
-    if processed then return end
-
-    if kc == Enum.KeyCode.LeftControl then
-        mainFrame.Visible = not mainFrame.Visible
-        if not mainFrame.Visible then closeSettings() end
-        return
-    end
-
-    -- Manual keybind always works, even during brainrot mode
-    local kbEnum = resolveKb(cfg.keybindKb)
-    local gpEnum = resolveKb(cfg.keybindGp)
-
-    if (kbEnum and kc == kbEnum and isKb)
-    or (gpEnum and kc == gpEnum and isGp) then
-        flipLag(not active, true)
+togBtn.MouseButton1Click:Connect(function()
+    if Steal.AutoStealEnabled then
+        disableGrab()
+        togBtn.Text             = "OFF"
+        togBtn.TextColor3       = Color3.fromRGB(255, 100, 130)
+        togBtn.BackgroundColor3 = Color3.fromRGB(60, 30, 48)
+        togLbl.Text             = "Auto Steal: OFF"
+    else
+        enableGrab()
+        togBtn.Text             = "ON"
+        togBtn.TextColor3       = Color3.fromRGB(100, 255, 160)
+        togBtn.BackgroundColor3 = Color3.fromRGB(20, 55, 35)
+        togLbl.Text             = "Auto Steal: ON"
     end
 end)
 
-updateKbLabels()
+local dragging, dragStart, startPos
+card.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1
+       or inp.UserInputType == Enum.UserInputType.Touch then
+        dragging  = true
+        dragStart = inp.Position
+        startPos  = card.Position
+    end
+end)
+UIS.InputChanged:Connect(function(inp)
+    if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement
+       or inp.UserInputType == Enum.UserInputType.Touch) then
+        local d = inp.Position - dragStart
+        card.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + d.X,
+            startPos.Y.Scale, startPos.Y.Offset + d.Y
+        )
+    end
+end)
+UIS.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1
+       or inp.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
